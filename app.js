@@ -3,16 +3,19 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 const DB_NAME = "page-vault";
 const STORE_NAME = "apps";
+const THEME_STORE_NAME = "themes";
 const PASSWORD_KEY = "page-vault-password";
 const SESSION_KEY = "page-vault-unlocked";
 const THEME_KEY = "page-vault-theme";
 const LOCK_TIMEOUT_KEY = "page-vault-lock-timeout";
 const LAST_ACTIVITY_KEY = "page-vault-last-activity";
+const ACTIVE_THEME_KEY = "page-vault-active-custom-theme";
 
 const state = {
   records: [], apps: [], trash: [], activeApp: null, editingId: null,
   deferredInstall: null, filter: { type: "all", value: "" },
   multiSelect: false, selected: new Set(), lockTimer: null,
+  themes: [], activeTheme: null, appliedThemeVariables: [],
   demo: new URLSearchParams(location.search).has("demo")
 };
 
@@ -72,22 +75,130 @@ function normalizeRecord(record) {
   };
 }
 
+function themeSlug(value) {
+  return String(value || "custom-theme").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "custom-theme";
+}
+
+function validateThemeCSS(css) {
+  const source = String(css || "");
+  if (source.length > 500000) throw new Error("theme_css_too_large");
+  const unsafe = /@import\b|javascript\s*:|expression\s*\(|behavior\s*:|-moz-binding|url\s*\(\s*(['"])?\s*(?:https?:|\/\/|file:|blob:)/i;
+  if (unsafe.test(source)) throw new Error("theme_external_resource");
+  return source;
+}
+
+function validateThemeAsset(value) {
+  const data = String(value || "");
+  const allowed = /^data:(?:image\/(?:png|jpeg|webp|gif|avif)|font\/(?:woff|woff2|ttf|otf)|application\/(?:font-woff|font-woff2));base64,/i;
+  if (allowed.test(data)) return data;
+  if (/^data:image\/svg\+xml;base64,/i.test(data)) {
+    try {
+      const svg = atob(data.slice(data.indexOf(",") + 1));
+      if (!/(?:https?:|<script|foreignObject|xlink:href|\shref\s*=)/i.test(svg)) return data;
+    } catch { /* invalid base64 */ }
+  }
+  return "";
+}
+
+function normalizeTheme(raw, fallbackName = "自定义主题") {
+  const input = raw && typeof raw === "object" ? raw : {};
+  const name = String(input.name || fallbackName).trim().slice(0, 60) || "自定义主题";
+  const variables = {};
+  for (const [key, value] of Object.entries(input.variables || {})) {
+    if (/^--[a-z0-9_-]+$/i.test(key) && String(value).length <= 500) {
+      validateThemeCSS(`x{value:${String(value)}}`);
+      variables[key] = String(value);
+    }
+  }
+  const assets = {};
+  let assetSize = 0;
+  for (const [key, value] of Object.entries(input.assets || {})) {
+    const data = validateThemeAsset(value);
+    if (!/^[a-z0-9_-]{1,60}$/i.test(key) || !data) continue;
+    assetSize += data.length;
+    if (assetSize > 4 * 1024 * 1024) throw new Error("theme_assets_too_large");
+    assets[key] = data;
+  }
+  let css = String(input.css || "");
+  for (const [key, data] of Object.entries(assets)) css = css.split(`asset://${key}`).join(data);
+  css = validateThemeCSS(css);
+  return {
+    id: themeSlug(input.id || name), format: "page-vault-theme", schemaVersion: 1,
+    name, author: String(input.author || "").slice(0, 60),
+    description: String(input.description || "").slice(0, 180),
+    variables, assets, css,
+    createdAt: input.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function clearAppliedTheme() {
+  for (const key of state.appliedThemeVariables) document.documentElement.style.removeProperty(key);
+  state.appliedThemeVariables = [];
+  $("#customThemeStyle").textContent = "";
+  delete document.documentElement.dataset.customTheme;
+}
+
+function setActiveThemeLabel() {
+  $("#activeThemeLabel").textContent = state.activeTheme?.name || "默认外观";
+}
+
+function applyCustomTheme(theme, persist = true) {
+  clearAppliedTheme();
+  const safeMode = new URLSearchParams(location.search).has("safe");
+  if (!theme || safeMode) {
+    state.activeTheme = null;
+    if (persist && !safeMode) localStorage.removeItem(ACTIVE_THEME_KEY);
+    setActiveThemeLabel();
+    return;
+  }
+  const normalized = normalizeTheme(theme, theme.name);
+  for (const [key, value] of Object.entries(normalized.variables)) {
+    document.documentElement.style.setProperty(key, value);
+    state.appliedThemeVariables.push(key);
+  }
+  $("#customThemeStyle").textContent = normalized.css;
+  document.documentElement.dataset.customTheme = normalized.id;
+  state.activeTheme = normalized;
+  if (persist) localStorage.setItem(ACTIVE_THEME_KEY, normalized.id);
+  setActiveThemeLabel();
+}
+
+async function loadThemes() {
+  state.themes = (await withStore("readonly", (store) => store.getAll(), THEME_STORE_NAME)).map((theme) => normalizeTheme(theme, theme.name));
+  const activeId = localStorage.getItem(ACTIVE_THEME_KEY);
+  const active = state.themes.find((theme) => theme.id === activeId) || null;
+  try { applyCustomTheme(active, false); }
+  catch { applyCustomTheme(null, false); }
+}
+
+async function saveTheme(theme) {
+  let record = normalizeTheme(theme, theme.name);
+  const existing = state.themes.find((item) => item.id === record.id);
+  if (existing && existing.updatedAt !== theme.updatedAt) record.id = `${record.id}-${Date.now().toString(36)}`;
+  await withStore("readwrite", (store) => store.put(record), THEME_STORE_NAME);
+  const index = state.themes.findIndex((item) => item.id === record.id);
+  if (index >= 0) state.themes[index] = record; else state.themes.push(record);
+  return record;
+}
+
 function openDatabase() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
+    const request = indexedDB.open(DB_NAME, 2);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME, { keyPath: "id" });
+      if (!request.result.objectStoreNames.contains(THEME_STORE_NAME)) request.result.createObjectStore(THEME_STORE_NAME, { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function withStore(mode, operation) {
+async function withStore(mode, operation, storeName = STORE_NAME) {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, mode);
-    const request = operation(transaction.objectStore(STORE_NAME));
+    const transaction = database.transaction(storeName, mode);
+    const request = operation(transaction.objectStore(storeName));
     if (request) {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -518,6 +629,99 @@ async function restoreBackup(file) {
   finally { $("#restoreInput").value = ""; }
 }
 
+function renderThemes() {
+  $("#themeCount").textContent = `${state.themes.length} 个`;
+  const defaultActive = !state.activeTheme;
+  const cards = [{ id: "", name: "页匣默认", author: "内置", description: "恢复页匣原本的纸张与墨色。", builtin: true }, ...state.themes];
+  $("#themeList").innerHTML = cards.map((theme) => {
+    const active = theme.builtin ? defaultActive : state.activeTheme?.id === theme.id;
+    const initials = glyphFor(theme.name);
+    return `<article class="theme-card${active ? " active" : ""}" data-theme-id="${escapeHTML(theme.id)}">
+      <div class="theme-swatch"><span>${escapeHTML(initials)}</span><i></i><b></b></div>
+      <div class="theme-meta"><strong>${escapeHTML(theme.name)}</strong><small>${escapeHTML(theme.author || "未署名")}${active ? " · 使用中" : ""}</small><p>${escapeHTML(theme.description || "自定义页匣外观")}</p></div>
+      <div class="theme-actions">
+        <button type="button" data-theme-action="apply">${active ? "已应用" : "应用"}</button>
+        ${theme.builtin ? "" : '<button type="button" data-theme-action="export">导出</button><button class="danger-text" type="button" data-theme-action="delete">删除</button>'}
+      </div>
+    </article>`;
+  }).join("");
+}
+
+function openThemeWorkshop() {
+  renderThemes();
+  showSheet($("#themeSheet"));
+}
+
+async function importThemeFile(file) {
+  if (!file) return;
+  try {
+    if (file.size > 5 * 1024 * 1024) throw new Error("theme_file_too_large");
+    const text = await file.text();
+    let input;
+    if (/\.css$/i.test(file.name) || file.type === "text/css") {
+      input = { name: file.name.replace(/\.css$/i, ""), author: "", description: "从 CSS 文件导入", css: text };
+    } else {
+      input = JSON.parse(text);
+      if (input?.format !== "page-vault-theme") throw new Error("invalid_theme");
+    }
+    const record = await saveTheme(input);
+    applyCustomTheme(record);
+    renderThemes();
+    toast(`已应用“${record.name}”`);
+  } catch (error) {
+    const messages = {
+      theme_file_too_large: "主题文件超过 5 MB。",
+      theme_css_too_large: "主题里的 CSS 太大了。",
+      theme_assets_too_large: "主题资源超过 4 MB。",
+      theme_external_resource: "主题含有外部链接或不安全代码。",
+      invalid_theme: "这不是有效的页匣主题文件。"
+    };
+    toast(messages[error.message] || "主题文件无法读取");
+  } finally {
+    $("#themeFileInput").value = "";
+  }
+}
+
+function exportTheme(theme) {
+  const payload = { ...theme, format: "page-vault-theme", schemaVersion: 1 };
+  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }), `${safeFileName(theme.name)}.pvtheme`);
+}
+
+function downloadThemeTemplate() {
+  const template = {
+    format: "page-vault-theme", schemaVersion: 1, id: "my-theme", name: "我的主题", author: "",
+    description: "写一句主题说明。",
+    variables: {
+      "--bg": "#eee9df", "--paper": "#f8f4ec", "--ink": "#24211d", "--muted": "#777066",
+      "--line": "rgba(36,33,29,.14)", "--line-strong": "rgba(36,33,29,.28)"
+    },
+    assets: {},
+    css: ".hero h2 { letter-spacing: -.055em; }\n.app-icon { border-radius: 18%; }\n.app-card strong { letter-spacing: .04em; }\n/* 本地资源可写入 assets，然后在 CSS 使用 url(\"asset://资源名\") */"
+  };
+  downloadBlob(new Blob([JSON.stringify(template, null, 2)], { type: "application/json;charset=utf-8" }), "page-vault-theme-template.pvtheme");
+  toast("主题模板已下载");
+}
+
+async function handleThemeAction(id, action) {
+  const theme = state.themes.find((item) => item.id === id) || null;
+  if (action === "apply") {
+    applyCustomTheme(theme);
+    renderThemes();
+    toast(theme ? `已应用“${theme.name}”` : "已恢复默认外观");
+    return;
+  }
+  if (!theme) return;
+  if (action === "export") return exportTheme(theme);
+  if (action === "delete") {
+    if (!confirm(`删除主题“${theme.name}”吗？`)) return;
+    await withStore("readwrite", (store) => store.delete(theme.id), THEME_STORE_NAME);
+    state.themes = state.themes.filter((item) => item.id !== theme.id);
+    if (state.activeTheme?.id === theme.id) applyCustomTheme(null);
+    renderThemes();
+    toast("主题已删除");
+  }
+}
+
 function renderTrash() {
   $("#emptyTrashButton").disabled = state.trash.length === 0;
   $("#trashList").innerHTML = state.trash.length ? state.trash.map((app) => {
@@ -552,6 +756,7 @@ async function init() {
   applyTheme(localStorage.getItem(THEME_KEY) || "system"); $("#lockTimeout").value = String(lockMinutes());
   if (hasLockExpired()) { sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(LAST_ACTIVITY_KEY); }
   try {
+    await loadThemes();
     const session = await api("./api/auth");
     if (!session.authenticated) showLogin(session.configured); else { await loadApps(); touchActivity(); }
   } catch { showLogin(Boolean(localStorage.getItem(PASSWORD_KEY)), "暂时无法读取设备存储。"); }
@@ -583,6 +788,14 @@ $("#lockTimeout").addEventListener("change", (event) => { localStorage.setItem(L
 $("#backupButton").addEventListener("click", exportBackup); $("#restoreButton").addEventListener("click", () => $("#restoreInput").click());
 $("#restoreInput").addEventListener("change", (event) => restoreBackup(event.target.files[0]));
 $("#trashButton").addEventListener("click", () => { renderTrash(); showSheet($("#trashSheet")); });
+$("#themeWorkshopButton").addEventListener("click", openThemeWorkshop);
+$("#importThemeButton").addEventListener("click", () => $("#themeFileInput").click());
+$("#themeFileInput").addEventListener("change", (event) => importThemeFile(event.target.files[0]));
+$("#themeHelpButton").addEventListener("click", downloadThemeTemplate);
+$("#themeList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-theme-action]"); if (!button) return;
+  handleThemeAction(button.closest(".theme-card").dataset.themeId, button.dataset.themeAction);
+});
 $("#trashList").addEventListener("click", (event) => { const button = event.target.closest("[data-trash-action]"); if (!button) return; handleTrashAction(button.closest(".trash-item").dataset.id, button.dataset.trashAction); });
 $("#emptyTrashButton").addEventListener("click", emptyTrash);
 $("#manageButton").addEventListener("click", () => state.multiSelect ? exitMultiSelect() : enterMultiSelect()); $("#cancelBatch").addEventListener("click", exitMultiSelect);

@@ -220,6 +220,36 @@ button { cursor: pointer; }
 .trash-item button:last-child { grid-column: 3; }
 .trash-empty { display: grid; min-height: 210px; place-items: center; color: var(--muted); font-size: 13px; }
 
+.theme-workshop { padding-top: 14px; }
+.theme-import { width: 100%; min-height: 76px; display: flex; align-items: center; gap: 14px; padding: 13px; border: 1px dashed var(--line-strong); border-radius: 20px; background: color-mix(in srgb, var(--paper) 68%, transparent); text-align: left; }
+.theme-import-mark { flex: 0 0 auto; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 15px; background: var(--ink); color: var(--bg); font-size: 23px; font-weight: 300; }
+.theme-import strong, .theme-import small { display: block; }
+.theme-import strong { margin-bottom: 4px; font-size: 13px; }
+.theme-import small { color: var(--muted); font-size: 10px; }
+.theme-safe-note { margin: 14px 0 22px; padding: 13px 15px; border-left: 2px solid var(--line-strong); color: var(--muted); }
+.theme-safe-note strong { color: var(--ink); font-size: 11px; }
+.theme-safe-note p { margin: 5px 0 0; font-size: 10px; line-height: 1.55; }
+.theme-safe-note code { padding: 2px 5px; border-radius: 5px; background: var(--paper); color: var(--ink); font-family: "SFMono-Regular", Consolas, monospace; }
+.theme-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+.theme-section-head strong { font-family: Georgia, "Noto Serif SC", serif; font-size: 17px; font-weight: 500; }
+.theme-section-head small { color: var(--muted); font-size: 9px; }
+.theme-list { display: grid; gap: 10px; }
+.theme-card { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 13px; padding: 13px; border: 1px solid var(--line); border-radius: 20px; background: color-mix(in srgb, var(--paper) 72%, transparent); }
+.theme-card.active { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.theme-swatch { position: relative; grid-row: span 2; width: 64px; height: 64px; overflow: hidden; border-radius: 17px; background: var(--ink); color: var(--bg); }
+.theme-swatch span { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; font-family: Georgia, serif; font-size: 24px; }
+.theme-swatch i, .theme-swatch b { position: absolute; border: 1px solid currentColor; border-radius: 50%; opacity: .25; }
+.theme-swatch i { width: 48px; height: 48px; right: -20px; bottom: -18px; }
+.theme-swatch b { width: 31px; height: 31px; left: -14px; top: -12px; }
+.theme-meta { min-width: 0; }
+.theme-meta strong, .theme-meta small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-meta strong { margin: 2px 0 4px; font-size: 13px; }
+.theme-meta small { color: var(--muted); font-size: 9px; }
+.theme-meta p { margin: 6px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.theme-actions { grid-column: 2; display: flex; gap: 6px; }
+.theme-actions button { height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: transparent; font-size: 9px; }
+.theme-card.active .theme-actions button:first-child { background: var(--ink); color: var(--bg); }
+
 .batch-bar { position: fixed; z-index: 45; left: 50%; bottom: calc(var(--safe-bottom) + 15px); width: min(calc(100% - 24px), 720px); display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 10px; padding: 10px 12px; transform: translateX(-50%); border: 1px solid var(--line); border-radius: 20px; background: var(--bg-elevated); box-shadow: var(--shadow); backdrop-filter: blur(24px); }
 .batch-bar > button, .batch-bar div button { min-height: 34px; padding: 0 9px; border: 0; border-radius: 10px; background: var(--paper); font-size: 10px; }
 .batch-bar strong { font-size: 11px; white-space: nowrap; }

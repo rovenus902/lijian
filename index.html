@@ -12,6 +12,7 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
+  <style id="customThemeStyle"></style>
   <title>页匣</title>
 </head>
 <body>
@@ -184,9 +185,32 @@
       <button id="restoreButton" type="button"><span><strong>从备份恢复</strong><small>导入页匣备份文件</small></span><i>›</i></button>
       <input id="restoreInput" type="file" accept=".json,.pagevault,application/json" hidden>
       <button id="trashButton" type="button"><span><strong>回收站</strong><small id="trashCount">0 个项目</small></span><i>›</i></button>
+      <button id="themeWorkshopButton" type="button"><span><strong>主题工坊</strong><small id="activeThemeLabel">默认外观</small></span><i>›</i></button>
       <div class="setting-row"><span><strong>自动锁定</strong><small>无操作一段时间后重新输入密码</small></span><select id="lockTimeout" aria-label="自动锁定时间"><option value="0">仅手动</option><option value="1">1 分钟</option><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div>
       <div class="setting-row"><span><strong>外观</strong><small>跟随设备，也可以手动切换</small></span><div class="theme-switch" role="group" aria-label="外观"><button type="button" data-theme="system">自动</button><button type="button" data-theme="light">浅色</button><button type="button" data-theme="dark">深色</button></div></div>
       <button id="logoutButton" type="button"><span><strong>锁上页匣</strong><small>下次打开需要重新输入密码</small></span><i>›</i></button>
+    </div>
+  </section>
+
+  <section id="themeSheet" class="sheet" aria-modal="true" role="dialog" aria-labelledby="themeTitle" hidden>
+    <div class="sheet-handle"></div>
+    <header class="sheet-head">
+      <button class="text-button" data-close-sheet type="button">关闭</button>
+      <h2 id="themeTitle">主题工坊</h2>
+      <button id="themeHelpButton" class="text-button strong" type="button">模板</button>
+    </header>
+    <div class="sheet-body theme-workshop">
+      <input id="themeFileInput" type="file" accept=".pvtheme,.json,.css,application/json,text/css" hidden>
+      <button id="importThemeButton" class="theme-import" type="button">
+        <span class="theme-import-mark">＋</span>
+        <span><strong>导入新主题</strong><small>支持 .pvtheme、.json 与 .css</small></span>
+      </button>
+      <div class="theme-safe-note">
+        <strong>救援入口</strong>
+        <p>如果某个主题遮住了按钮，在网址末尾添加 <code>?safe=1</code>，即可跳过自定义主题。</p>
+      </div>
+      <div class="theme-section-head"><strong>我的主题</strong><small id="themeCount">0 个</small></div>
+      <div id="themeList" class="theme-list"></div>
     </div>
   </section>
 
