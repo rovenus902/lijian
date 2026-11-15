@@ -172,6 +172,7 @@
       <button data-action="edit" type="button"><svg viewBox="0 0 24 24"><path d="m4 16-.7 4.7L8 20l11-11-4-4L4 16ZM13.5 6.5l4 4"/></svg><span>编辑</span></button>
       <button data-action="share" type="button"><svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5"/></svg><span>分享 HTML</span></button>
       <button data-action="download" type="button"><svg viewBox="0 0 24 24"><path d="M12 4v11M7.5 11.5 12 16l4.5-4.5M4 20h16"/></svg><span>下载 HTML</span></button>
+      <button data-action="clear-data" type="button"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 7l1 13h8l1-13M9 4h6M9.5 11.5l5 5M14.5 11.5l-5 5"/></svg><span>清除应用数据</span></button>
       <button data-action="delete" class="danger" type="button"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg><span>移到回收站</span></button>
     </div>
   </section>
@@ -181,7 +182,7 @@
     <header class="settings-title"><p class="eyebrow">PAGE VAULT</p><h2 id="settingsTitle">设置</h2></header>
     <div class="settings-list">
       <button id="installButton" type="button"><span><strong>安装到主屏幕</strong><small>像普通 App 一样打开页匣</small></span><i>›</i></button>
-      <button id="backupButton" type="button"><span><strong>备份全部内容</strong><small>导出 HTML、图标、文件夹和标签</small></span><i>›</i></button>
+      <button id="backupButton" type="button"><span><strong>备份全部内容</strong><small>包含 HTML、设置和应用内保存的数据</small></span><i>›</i></button>
       <button id="restoreButton" type="button"><span><strong>从备份恢复</strong><small>导入页匣备份文件</small></span><i>›</i></button>
       <input id="restoreInput" type="file" accept=".json,.pagevault,application/json" hidden>
       <button id="trashButton" type="button"><span><strong>回收站</strong><small id="trashCount">0 个项目</small></span><i>›</i></button>
@@ -206,8 +207,8 @@
         <span><strong>导入新主题</strong><small>支持 .pvtheme、.json 与 .css</small></span>
       </button>
       <div class="theme-safe-note">
-        <strong>救援入口</strong>
-        <p>如果某个主题遮住了按钮，在网址末尾添加 <code>?safe=1</code>，即可跳过自定义主题。</p>
+        <strong>PWA 救援暗门</strong>
+        <p>如果主题遮住页面，重新打开页匣后连续点击屏幕左上角 7 次，即可强制恢复默认外观。浏览器中也可使用 <code>?safe=1</code>。</p>
       </div>
       <div class="theme-section-head"><strong>我的主题</strong><small id="themeCount">0 个</small></div>
       <div id="themeList" class="theme-list"></div>
@@ -240,7 +241,7 @@
   <section id="viewer" class="viewer" hidden>
     <header class="viewer-bar">
       <button id="closeViewer" type="button" aria-label="返回页匣"><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg></button>
-      <div><strong id="viewerTitle"></strong><small id="viewerMode">沙盒运行</small></div>
+      <div><strong id="viewerTitle"></strong><small id="viewerMode">本机自动保存</small></div>
       <button id="viewerMore" type="button" aria-label="更多"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
     </header>
     <iframe id="appFrame" title="HTML 应用预览" sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-popups"></iframe>

@@ -4,6 +4,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const DB_NAME = "page-vault";
 const STORE_NAME = "apps";
 const THEME_STORE_NAME = "themes";
+const APP_STATE_STORE_NAME = "appStates";
 const PASSWORD_KEY = "page-vault-password";
 const SESSION_KEY = "page-vault-unlocked";
 const THEME_KEY = "page-vault-theme";
@@ -16,6 +17,7 @@ const state = {
   deferredInstall: null, filter: { type: "all", value: "" },
   multiSelect: false, selected: new Set(), lockTimer: null,
   themes: [], activeTheme: null, appliedThemeVariables: [],
+  runtimeSaveChain: Promise.resolve(),
   demo: new URLSearchParams(location.search).has("demo")
 };
 
@@ -146,9 +148,14 @@ function setActiveThemeLabel() {
 function applyCustomTheme(theme, persist = true) {
   clearAppliedTheme();
   const safeMode = new URLSearchParams(location.search).has("safe");
-  if (!theme || safeMode) {
+  if (!theme) {
     state.activeTheme = null;
-    if (persist && !safeMode) localStorage.removeItem(ACTIVE_THEME_KEY);
+    if (persist) localStorage.removeItem(ACTIVE_THEME_KEY);
+    setActiveThemeLabel();
+    return;
+  }
+  if (safeMode) {
+    state.activeTheme = null;
     setActiveThemeLabel();
     return;
   }
@@ -184,10 +191,11 @@ async function saveTheme(theme) {
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 2);
+    const request = indexedDB.open(DB_NAME, 3);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME, { keyPath: "id" });
       if (!request.result.objectStoreNames.contains(THEME_STORE_NAME)) request.result.createObjectStore(THEME_STORE_NAME, { keyPath: "id" });
+      if (!request.result.objectStoreNames.contains(APP_STATE_STORE_NAME)) request.result.createObjectStore(APP_STATE_STORE_NAME, { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -218,6 +226,218 @@ async function putMany(records) {
     transaction.onerror = () => { database.close(); reject(transaction.error); };
   });
 }
+
+function cloneJSON(value, fallback) {
+  try { return JSON.parse(JSON.stringify(value)); }
+  catch { return fallback; }
+}
+
+function normalizeRuntimeState(id, input = {}) {
+  const record = {
+    id,
+    form: input.form && typeof input.form === "object" ? cloneJSON(input.form, {}) : {},
+    storage: input.storage && typeof input.storage === "object" ? cloneJSON(input.storage, {}) : {},
+    custom: cloneJSON(input.custom, null),
+    scroll: {
+      x: Number.isFinite(Number(input.scroll?.x)) ? Number(input.scroll.x) : 0,
+      y: Number.isFinite(Number(input.scroll?.y)) ? Number(input.scroll.y) : 0
+    },
+    updatedAt: new Date().toISOString()
+  };
+  if (JSON.stringify(record).length > 5 * 1024 * 1024) throw new Error("runtime_state_too_large");
+  return record;
+}
+
+async function getRuntimeState(id) {
+  if (state.demo) return normalizeRuntimeState(id);
+  const saved = await withStore("readonly", (store) => store.get(id), APP_STATE_STORE_NAME);
+  return normalizeRuntimeState(id, saved || {});
+}
+
+async function putRuntimeStates(records) {
+  if (!Array.isArray(records) || !records.length) return;
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(APP_STATE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(APP_STATE_STORE_NAME);
+    records.forEach((record) => {
+      if (record?.id) store.put(normalizeRuntimeState(String(record.id), record));
+    });
+    transaction.oncomplete = () => { database.close(); resolve(); };
+    transaction.onerror = () => { database.close(); reject(transaction.error); };
+  });
+}
+
+async function deleteRuntimeState(id) {
+  if (state.demo) return;
+  await withStore("readwrite", (store) => store.delete(id), APP_STATE_STORE_NAME);
+}
+
+function queueRuntimeStateSave(id, payload) {
+  if (state.demo || !id) return;
+  const snapshot = normalizeRuntimeState(id, payload);
+  state.runtimeSaveChain = state.runtimeSaveChain
+    .catch(() => {})
+    .then(() => withStore("readwrite", (store) => store.put(snapshot), APP_STATE_STORE_NAME))
+    .catch((error) => console.warn("Page Vault state save failed", error));
+}
+
+function pageVaultRuntimeBridge(initialState, appId) {
+  "use strict";
+  const CHANNEL = "page-vault-runtime-v1";
+  const initial = initialState && typeof initialState === "object" ? initialState : {};
+  let formState = initial.form && typeof initial.form === "object" ? initial.form : {};
+  let customState = initial.custom ?? null;
+  let scrollState = initial.scroll && typeof initial.scroll === "object" ? initial.scroll : { x: 0, y: 0 };
+  let saveTimer = 0;
+  let restoring = false;
+  const storageData = {};
+  const restoredFields = new WeakSet();
+
+  Object.entries(initial.storage || {}).forEach(([key, value]) => { storageData[String(key)] = String(value); });
+
+  function clone(value, fallback = null) {
+    try { return JSON.parse(JSON.stringify(value)); }
+    catch { return fallback; }
+  }
+
+  function post(type, payload) {
+    parent.postMessage({ channel: CHANNEL, type, appId, payload }, "*");
+  }
+
+  const storage = {
+    key(index) { return Object.keys(storageData)[Number(index)] ?? null; },
+    getItem(key) { key = String(key); return Object.prototype.hasOwnProperty.call(storageData, key) ? storageData[key] : null; },
+    setItem(key, value) { storageData[String(key)] = String(value); scheduleSave(); },
+    removeItem(key) { delete storageData[String(key)]; scheduleSave(); },
+    clear() { Object.keys(storageData).forEach((key) => delete storageData[key]); scheduleSave(); }
+  };
+  Object.defineProperty(storage, "length", { enumerable: true, get: () => Object.keys(storageData).length });
+  try { Object.defineProperty(window, "localStorage", { configurable: true, enumerable: true, value: storage }); }
+  catch { /* opaque sandbox storage stays unavailable; PageVault.storage still works */ }
+
+  function editableFields() {
+    return [...document.querySelectorAll("input, textarea, select, [contenteditable]")]
+      .filter((element) => element.type !== "file" && element.type !== "password");
+  }
+
+  function fieldKey(element) {
+    if (element.dataset?.pvKey) return `key:${element.dataset.pvKey}`;
+    if (element.id) return `id:${element.id}`;
+    const type = String(element.type || element.tagName).toLowerCase();
+    if (element.name) {
+      const peers = editableFields().filter((item) => item.name === element.name && String(item.type || item.tagName).toLowerCase() === type);
+      const valuePart = ["checkbox", "radio"].includes(type) ? `:${element.value}` : "";
+      return `name:${element.name}:${type}${valuePart}:${Math.max(0, peers.indexOf(element))}`;
+    }
+    const fields = editableFields();
+    return `index:${fields.indexOf(element)}:${type}`;
+  }
+
+  function readField(element) {
+    const type = String(element.type || "").toLowerCase();
+    if (element.isContentEditable) return { kind: "html", value: element.innerHTML };
+    if (type === "checkbox" || type === "radio") return { kind: "check", checked: element.checked, value: element.value };
+    if (element.tagName === "SELECT" && element.multiple) {
+      return { kind: "multi", values: [...element.selectedOptions].map((option) => option.value) };
+    }
+    return { kind: "value", value: element.value };
+  }
+
+  function restoreField(element, saved) {
+    if (!saved || typeof saved !== "object") return;
+    if (saved.kind === "html" && element.isContentEditable) element.innerHTML = String(saved.value ?? "");
+    else if (saved.kind === "check" && "checked" in element) element.checked = Boolean(saved.checked);
+    else if (saved.kind === "multi" && element.tagName === "SELECT") {
+      const selected = new Set(Array.isArray(saved.values) ? saved.values.map(String) : []);
+      [...element.options].forEach((option) => { option.selected = selected.has(option.value); });
+    } else if ("value" in element && saved.kind === "value") element.value = String(saved.value ?? "");
+  }
+
+  function collectForm() {
+    const next = {};
+    editableFields().forEach((element) => { next[fieldKey(element)] = readField(element); });
+    formState = next;
+  }
+
+  function restoreForm(onlyNew = false) {
+    restoring = true;
+    editableFields().forEach((element) => {
+      if (!onlyNew || !restoredFields.has(element)) restoreField(element, formState[fieldKey(element)]);
+      restoredFields.add(element);
+    });
+    restoring = false;
+  }
+
+  function snapshot() {
+    collectForm();
+    scrollState = { x: Math.round(window.scrollX || 0), y: Math.round(window.scrollY || 0) };
+    return { form: formState, storage: { ...storageData }, custom: clone(customState), scroll: scrollState };
+  }
+
+  function flush() {
+    clearTimeout(saveTimer);
+    post("save", snapshot());
+  }
+
+  function scheduleSave(immediate = false) {
+    if (restoring) return;
+    clearTimeout(saveTimer);
+    if (immediate) flush(); else saveTimer = setTimeout(flush, 180);
+  }
+
+  window.PageVault = {
+    version: 1,
+    storage,
+    saveState(value) { customState = clone(value); scheduleSave(true); return clone(customState); },
+    loadState() { return clone(customState); },
+    clearState() {
+      formState = {}; customState = null; scrollState = { x: 0, y: 0 };
+      storage.clear(); scheduleSave(true); return true;
+    }
+  };
+
+  document.addEventListener("input", () => scheduleSave(), true);
+  document.addEventListener("change", () => scheduleSave(), true);
+  document.addEventListener("scroll", () => scheduleSave(), true);
+  window.addEventListener("pagehide", flush);
+  window.addEventListener("message", (event) => {
+    if (event.data?.channel === CHANNEL && event.data?.type === "flush") flush();
+  });
+
+  function restoreAll() {
+    restoreForm();
+    const restoreScroll = () => window.scrollTo(Number(scrollState.x) || 0, Number(scrollState.y) || 0);
+    requestAnimationFrame(restoreScroll);
+    setTimeout(restoreScroll, 80);
+    setTimeout(restoreScroll, 260);
+    window.dispatchEvent(new CustomEvent("pagevaultrestore", { detail: clone(customState) }));
+    post("ready", { restored: true });
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", restoreAll, { once: true });
+  else restoreAll();
+  new MutationObserver(() => restoreForm(true)).observe(document.documentElement, { childList: true, subtree: true });
+}
+
+function buildRuntimeDocument(html, appId, runtimeState) {
+  const source = `;(${pageVaultRuntimeBridge.toString()})(${JSON.stringify(runtimeState).replace(/</g, "\\u003c")},${JSON.stringify(appId)});`;
+  const script = `<script>${source.replace(/<\/script/gi, "<\\/script")}<\/script>`;
+  if (/<head(?:\s[^>]*)?>/i.test(html)) return html.replace(/<head(?:\s[^>]*)?>/i, (match) => `${match}${script}`);
+  if (/<html(?:\s[^>]*)?>/i.test(html)) return html.replace(/<html(?:\s[^>]*)?>/i, (match) => `${match}<head>${script}</head>`);
+  if (/<!doctype[^>]*>/i.test(html)) return html.replace(/<!doctype[^>]*>/i, (match) => `${match}${script}`);
+  return `${script}${html}`;
+}
+
+window.addEventListener("message", (event) => {
+  const frame = $("#appFrame");
+  if (!frame || event.source !== frame.contentWindow) return;
+  const message = event.data;
+  if (message?.channel !== "page-vault-runtime-v1" || message.type !== "save") return;
+  if (!state.activeApp?.id || message.appId !== state.activeApp.id) return;
+  try { queueRuntimeStateSave(message.appId, message.payload); }
+  catch (error) { console.warn("Page Vault rejected app state", error); }
+});
 
 async function digest(value) {
   const output = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -282,6 +502,7 @@ async function api(path, options = {}) {
   if (method === "DELETE" && id) {
     if (url.searchParams.get("permanent") === "1") {
       await withStore("readwrite", (store) => store.delete(id));
+      await deleteRuntimeState(id);
       return { ok: true, permanent: true };
     }
     const current = await withStore("readonly", (store) => store.get(id));
@@ -490,14 +711,24 @@ async function getFullApp(id) {
 async function openViewer(id) {
   try {
     const record = await getFullApp(id); const openedAt = new Date().toISOString();
+    const runtimeState = await getRuntimeState(id);
     record.lastOpenedAt = openedAt; state.activeApp = record;
     await updateApp(id, { lastOpenedAt: openedAt, _touchOnly: true });
-    $("#viewerTitle").textContent = record.title; $("#appFrame").srcdoc = record.html;
+    $("#viewerTitle").textContent = record.title; $("#viewerMode").textContent = "本机自动保存";
+    $("#appFrame").srcdoc = buildRuntimeDocument(record.html, id, runtimeState);
     $("#viewer").hidden = false; document.body.style.overflow = "hidden"; renderApps();
   } catch (error) { toast(friendlyError(error)); }
 }
 
-function closeViewer() { $("#viewer").hidden = true; $("#appFrame").srcdoc = ""; document.body.style.overflow = ""; }
+async function closeViewer() {
+  const frame = $("#appFrame");
+  if (!$("#viewer").hidden && frame.contentWindow) {
+    frame.contentWindow.postMessage({ channel: "page-vault-runtime-v1", type: "flush" }, "*");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await state.runtimeSaveChain;
+  }
+  $("#viewer").hidden = true; frame.srcdoc = ""; document.body.style.overflow = "";
+}
 
 function openActions(id) {
   const app = state.apps.find((item) => item.id === id) || state.activeApp;
@@ -527,6 +758,12 @@ async function handleAction(action) {
   if (action === "favorite") {
     try { await updateApp(app.id, { favorite: !app.favorite }); renderApps(); toast(app.favorite ? "已取消收藏" : "已收藏置顶"); }
     catch (error) { toast(friendlyError(error)); } return;
+  }
+  if (action === "clear-data") {
+    if (!confirm(`清除“${app.title}”在页匣里自动保存的填写内容和页面数据吗？HTML 本身不会删除。`)) return;
+    try { await deleteRuntimeState(app.id); toast("应用数据已清除"); }
+    catch { toast("刚才没有清除成功"); }
+    return;
   }
   const full = await getFullApp(app.id);
   if (action === "edit") return openEditor(full);
@@ -612,9 +849,10 @@ async function batchTags(mode) {
 async function exportBackup() {
   try {
     const records = state.demo ? demoApps : (await withStore("readonly", (store) => store.getAll())).map(normalizeRecord);
-    const backup = { format: "page-vault-backup", version: 2, exportedAt: new Date().toISOString(), apps: records };
+    const appStates = state.demo ? [] : await withStore("readonly", (store) => store.getAll(), APP_STATE_STORE_NAME);
+    const backup = { format: "page-vault-backup", version: 3, exportedAt: new Date().toISOString(), apps: records, appStates };
     downloadBlob(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" }), `page-vault-backup-${new Date().toISOString().slice(0, 10)}.json`);
-    closeSheets(); toast(`已备份 ${records.length} 个项目`);
+    closeSheets(); toast(`已备份 ${records.length} 个项目和应用数据`);
   } catch { toast("备份生成失败"); }
 }
 
@@ -624,7 +862,9 @@ async function restoreBackup(file) {
     const data = JSON.parse(await file.text());
     if (data?.format !== "page-vault-backup" || !Array.isArray(data.apps)) throw new Error("invalid_backup");
     if (!confirm(`备份中有 ${data.apps.length} 个项目。相同项目会更新，继续恢复吗？`)) return;
-    await putMany(data.apps); await loadApps(); closeSheets(); toast("备份已经恢复");
+    await putMany(data.apps);
+    if (Array.isArray(data.appStates)) await putRuntimeStates(data.appStates);
+    await loadApps(); closeSheets(); toast("备份和应用数据已经恢复");
   } catch { toast("这不是有效的页匣备份"); }
   finally { $("#restoreInput").value = ""; }
 }
@@ -751,6 +991,25 @@ async function emptyTrash() {
   } catch (error) { toast(friendlyError(error)); }
 }
 
+function installPwaRescueGesture() {
+  let taps = 0;
+  let lastTap = 0;
+  window.addEventListener("pointerdown", (event) => {
+    const inRescueCorner = event.clientX <= 110 && event.clientY <= 150;
+    if (!inRescueCorner) { taps = 0; lastTap = 0; return; }
+    const now = Date.now();
+    taps = now - lastTap <= 1100 ? taps + 1 : 1;
+    lastTap = now;
+    if (taps < 7) return;
+    taps = 0; lastTap = 0;
+    event.preventDefault();
+    localStorage.removeItem(ACTIVE_THEME_KEY);
+    try { clearAppliedTheme(); } catch { /* the reload below is the final reset */ }
+    alert("页匣已关闭自定义主题，即将恢复默认外观。");
+    location.reload();
+  }, { capture: true, passive: false });
+}
+
 async function init() {
   $("#dateLabel").textContent = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date());
   applyTheme(localStorage.getItem(THEME_KEY) || "system"); $("#lockTimeout").value = String(lockMinutes());
@@ -781,7 +1040,7 @@ $("#titleInput").addEventListener("input", updateIconPreview); $("#htmlInput").a
 $("#searchInput").addEventListener("input", renderApps);
 $("#filterBar").addEventListener("click", (event) => { const button = event.target.closest("[data-filter-type]"); if (!button) return; state.filter = { type: button.dataset.filterType, value: button.dataset.filterValue }; renderApps(); });
 $$("[data-action]").forEach((button) => button.addEventListener("click", () => handleAction(button.dataset.action)));
-$("#closeViewer").addEventListener("click", closeViewer); $("#viewerMore").addEventListener("click", () => { closeViewer(); openActions(state.activeApp?.id); });
+$("#closeViewer").addEventListener("click", closeViewer); $("#viewerMore").addEventListener("click", async () => { await closeViewer(); openActions(state.activeApp?.id); });
 $$("[data-theme]").forEach((button) => button.addEventListener("click", () => applyTheme(button.dataset.theme)));
 $("#logoutButton").addEventListener("click", lockVault);
 $("#lockTimeout").addEventListener("change", (event) => { localStorage.setItem(LOCK_TIMEOUT_KEY, event.target.value); touchActivity(); toast("自动锁定时间已保存"); });
@@ -814,4 +1073,5 @@ $("#installButton").addEventListener("click", async () => {
 ["pointerdown", "keydown"].forEach((eventName) => document.addEventListener(eventName, touchActivity, { passive: true }));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && hasLockExpired()) lockVault(); else if (document.visibilityState === "visible") touchActivity(); });
 if ("serviceWorker" in navigator && !state.demo) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+installPwaRescueGesture();
 init();
