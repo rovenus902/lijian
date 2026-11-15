@@ -1,0 +1,16 @@
+{
+  "name": "页匣 · HTML 应用桌面",
+  "short_name": "页匣",
+  "description": "把单文件 HTML 收进一块随时可以打开的私人应用桌面。",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f0ede6",
+  "theme_color": "#f0ede6",
+  "orientation": "any",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
