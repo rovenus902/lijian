@@ -45,7 +45,10 @@ function hash(input) {
   return Math.abs(value);
 }
 
-function paletteFor(app) {
+function paletteFor(app, index = 0) {
+  const cardTheme = state.activeTheme?.cards;
+  if (cardTheme?.colorMode === "uniform" && cardTheme.palette.length) return cardTheme.palette[0];
+  if (cardTheme?.colorMode === "cycle" && cardTheme.palette.length) return cardTheme.palette[index % cardTheme.palette.length];
   if (/^#[0-9a-f]{6}$/i.test(app.themeColor || "")) return [app.themeColor, "#fffaf0"];
   return palettes[hash(app.title || app.id) % palettes.length];
 }
@@ -115,6 +118,35 @@ function validateThemeAsset(value) {
   return "";
 }
 
+function normalizeThemeColor(value, fallback) {
+  const color = String(value || "").trim();
+  if (!color || color.length > 120) return fallback;
+  validateThemeCSS(`x{color:${color}}`);
+  return color;
+}
+
+function normalizeThemeCards(raw) {
+  const input = raw && typeof raw === "object" ? raw : {};
+  const colorMode = ["original", "uniform", "cycle"].includes(input.colorMode) ? input.colorMode : "original";
+  const rawPalette = Array.isArray(input.palette) ? input.palette : [];
+  const palette = rawPalette.slice(0, 24).map((pair) => {
+    const source = Array.isArray(pair) ? pair : [pair?.background, pair?.foreground];
+    return [normalizeThemeColor(source[0], "#34322f"), normalizeThemeColor(source[1], "#fffaf0")];
+  });
+  if (!palette.length && colorMode !== "original") palette.push(["#34322f", "#fffaf0"]);
+  const variants = (Array.isArray(input.variants) ? input.variants : []).slice(0, 24).map((variant) => {
+    const safe = {};
+    if (!variant || typeof variant !== "object") return safe;
+    for (const [key, value] of Object.entries(variant)) {
+      if (!/^--(?:card|icon|title|subtitle|badge)-[a-z0-9_-]+$/i.test(key) || String(value).length > 500) continue;
+      validateThemeCSS(`x{${key}:${String(value)}}`);
+      safe[key] = String(value);
+    }
+    return safe;
+  }).filter((variant) => Object.keys(variant).length);
+  return { colorMode, palette, variants };
+}
+
 function normalizeTheme(raw, fallbackName = "自定义主题") {
   const input = raw && typeof raw === "object" ? raw : {};
   const name = String(input.name || fallbackName).trim().slice(0, 60) || "自定义主题";
@@ -138,10 +170,10 @@ function normalizeTheme(raw, fallbackName = "自定义主题") {
   for (const [key, data] of Object.entries(assets)) css = css.split(`asset://${key}`).join(data);
   css = validateThemeCSS(css);
   return {
-    id: themeSlug(input.id || name), format: "page-vault-theme", schemaVersion: 1,
+    id: themeSlug(input.id || name), format: "page-vault-theme", schemaVersion: 2,
     name, author: String(input.author || "").slice(0, 60),
     description: String(input.description || "").slice(0, 180),
-    variables, assets, css,
+    variables, assets, css, cards: normalizeThemeCards(input.cards),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -152,10 +184,15 @@ function clearAppliedTheme() {
   state.appliedThemeVariables = [];
   $("#customThemeStyle").textContent = "";
   delete document.documentElement.dataset.customTheme;
+  delete document.documentElement.dataset.cardColorMode;
 }
 
 function setActiveThemeLabel() {
   $("#activeThemeLabel").textContent = state.activeTheme?.name || "默认外观";
+}
+
+function refreshThemeCards() {
+  if ($("#appGrid") && state.apps.length) renderApps();
 }
 
 function applyCustomTheme(theme, persist = true) {
@@ -165,11 +202,13 @@ function applyCustomTheme(theme, persist = true) {
     state.activeTheme = null;
     if (persist) localStorage.removeItem(ACTIVE_THEME_KEY);
     setActiveThemeLabel();
+    refreshThemeCards();
     return;
   }
   if (safeMode) {
     state.activeTheme = null;
     setActiveThemeLabel();
+    refreshThemeCards();
     return;
   }
   const normalized = normalizeTheme(theme, theme.name);
@@ -179,9 +218,11 @@ function applyCustomTheme(theme, persist = true) {
   }
   $("#customThemeStyle").textContent = normalized.css;
   document.documentElement.dataset.customTheme = normalized.id;
+  document.documentElement.dataset.cardColorMode = normalized.cards.colorMode;
   state.activeTheme = normalized;
   if (persist) localStorage.setItem(ACTIVE_THEME_KEY, normalized.id);
   setActiveThemeLabel();
+  refreshThemeCards();
 }
 
 async function loadThemes() {
@@ -786,6 +827,12 @@ function applyGridDensity(value = localStorage.getItem(GRID_DENSITY_KEY) || "3")
   if ($("#gridDensity")) $("#gridDensity").value = density;
 }
 
+function themeCardVariantStyle(index) {
+  const variants = state.activeTheme?.cards?.variants || [];
+  if (!variants.length) return "";
+  return Object.entries(variants[index % variants.length]).map(([key, value]) => `${key}:${value}`).join(";");
+}
+
 function renderApps() {
   renderFilterBar();
   const visible = filteredApps();
@@ -795,14 +842,16 @@ function renderApps() {
   $("#batchBar").hidden = !state.multiSelect;
   updateBatchBar();
   $("#appGrid").innerHTML = visible.map((app, index) => {
-    const [bg, fg] = paletteFor(app);
+    const cardIndex = Math.max(0, state.apps.findIndex((item) => item.id === app.id));
+    const [bg, fg] = paletteFor(app, cardIndex);
     const selected = state.selected.has(app.id);
     const badges = [app.folder, ...(app.tags || []).slice(0, 2)].filter(Boolean);
-    return `<article class="app-card${selected ? " is-selected" : ""}${state.multiSelect ? " is-selecting" : ""}" data-id="${escapeHTML(app.id)}" style="animation-delay:${Math.min(index * 35, 210)}ms">
+    const variantStyle = themeCardVariantStyle(cardIndex);
+    return `<article class="app-card${selected ? " is-selected" : ""}${state.multiSelect ? " is-selecting" : ""}" data-id="${escapeHTML(app.id)}" data-card-index="${cardIndex}" data-has-icon="${app.icon ? "true" : "false"}" style="--card-animation-delay:${Math.min(index * 35, 210)}ms;${escapeHTML(variantStyle)}">
       <button type="button" aria-label="${state.multiSelect ? "选择" : "打开"} ${escapeHTML(app.title)}">
-        <span class="app-icon" style="--icon-bg:${bg};--icon-fg:${fg}">${iconHTML(app)}${app.favorite ? '<i class="favorite-star">★</i>' : ""}<i class="selection-mark">✓</i></span>
-        <strong>${escapeHTML(app.title)}</strong><small>${escapeHTML(app.subtitle || formatDate(app.updatedAt))}</small>
-        ${badges.length ? `<span class="card-badges">${badges.map((badge) => `<i>${escapeHTML(badge)}</i>`).join("")}</span>` : ""}
+        <span class="app-icon" style="--icon-bg:${escapeHTML(bg)};--icon-fg:${escapeHTML(fg)}">${iconHTML(app)}<span class="card-decoration" aria-hidden="true"><i class="card-decoration-line"></i><i class="card-inner-frame"></i><i class="card-highlight"></i></span>${app.favorite ? '<i class="favorite-star">★</i>' : ""}<i class="selection-mark">✓</i></span>
+        <span class="card-copy"><strong>${escapeHTML(app.title)}</strong><small>${escapeHTML(app.subtitle || formatDate(app.updatedAt))}</small>
+        ${badges.length ? `<span class="card-badges">${badges.map((badge) => `<i>${escapeHTML(badge)}</i>`).join("")}</span>` : ""}</span>
       </button></article>`;
   }).join("");
   $$(".app-card").forEach((card) => {
@@ -1252,7 +1301,7 @@ async function exportBackup() {
       gridDensity: localStorage.getItem(GRID_DENSITY_KEY) || "3",
       lastApp: localStorage.getItem(LAST_APP_KEY) || ""
     };
-    const backup = { format: "lijian-backup", legacyFormat: "page-vault-backup", version: 5, exportedAt: new Date().toISOString(), apps: records, appStates, themes, viewerPreferences: state.viewerPreferences, settings };
+    const backup = { format: "lijian-backup", legacyFormat: "page-vault-backup", version: 6, exportedAt: new Date().toISOString(), apps: records, appStates, themes, viewerPreferences: state.viewerPreferences, settings };
     downloadBlob(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" }), `里间备份_${new Date().toISOString().slice(0, 10)}.lijian`);
     closeSheets(); toast(`已备份 ${records.length} 个项目和应用数据`);
   } catch { toast("备份生成失败"); }
@@ -1338,20 +1387,34 @@ async function importThemeFile(file) {
 }
 
 function exportTheme(theme) {
-  const payload = { ...theme, format: "page-vault-theme", schemaVersion: 1 };
+  const payload = { ...theme, format: "page-vault-theme", schemaVersion: 2 };
   downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }), `${safeFileName(theme.name)}.pvtheme`);
 }
 
 function downloadThemeTemplate() {
   const template = {
-    format: "page-vault-theme", schemaVersion: 1, id: "my-theme", name: "我的主题", author: "",
-    description: "写一句主题说明。",
+    format: "page-vault-theme", schemaVersion: 2, id: "my-theme", name: "我的主题", author: "",
+    description: "v6 卡片系统主题：形状、比例、文字、装饰、配色、错落变化与上传图标均可控制。",
     variables: {
       "--bg": "#eee9df", "--paper": "#f8f4ec", "--ink": "#24211d", "--muted": "#777066",
-      "--line": "rgba(36,33,29,.14)", "--line-strong": "rgba(36,33,29,.28)"
+      "--line": "rgba(36,33,29,.14)", "--line-strong": "rgba(36,33,29,.28)",
+      "--card-grid-row-gap": "24px", "--card-grid-column-gap": "16px",
+      "--card-width": "106px", "--card-aspect-ratio": "1", "--card-radius": "25%",
+      "--card-border-width": "1px", "--card-border-style": "solid", "--card-border-color": "rgba(255,255,255,.24)",
+      "--card-shadow": "0 12px 25px color-mix(in srgb, var(--icon-bg) 24%, transparent)",
+      "--card-icon-margin": "0 auto 10px", "--card-icon-padding": "0px", "--card-icon-transform": "none",
+      "--card-image-fit": "cover", "--card-image-radius": "0px", "--card-image-filter": "none", "--card-image-opacity": "1",
+      "--card-text-align": "center", "--card-title-size": "13px", "--card-title-weight": "600",
+      "--card-copy-position": "static", "--card-copy-inset": "auto", "--card-copy-padding": "0px", "--card-copy-background": "transparent",
+      "--card-decoration-line-display": "none", "--card-inner-frame-display": "none", "--card-highlight-display": "none"
+    },
+    cards: {
+      colorMode: "original",
+      palette: [["#3c4038", "#f5efdf"], ["#5a3932", "#f7e8d9"], ["#243a3c", "#edf0e8"]],
+      variants: []
     },
     assets: {},
-    css: ".hero h2 { letter-spacing: -.055em; }\n.app-icon { border-radius: 18%; }\n.app-card strong { letter-spacing: .04em; }\n/* 本地资源可写入 assets，然后在 CSS 使用 url(\"asset://资源名\") */"
+    css: ".hero h2 { letter-spacing: -.055em; }\n/* 上传图标也会使用同一套边框与效果；可用 [data-has-icon=\"true\"] 单独调整。 */\n/* 规律错落示例：.app-card:nth-child(even) { --card-icon-transform: translateY(6px) rotate(1deg); } */\n/* 装饰层可分别开启并替换：line、inner-frame、highlight。 */\n/* 本地资源可写入 assets，然后在 CSS 使用 url(\"asset://资源名\")。 */"
   };
   downloadBlob(new Blob([JSON.stringify(template, null, 2)], { type: "application/json;charset=utf-8" }), "page-vault-theme-template.pvtheme");
   toast("主题模板已下载");

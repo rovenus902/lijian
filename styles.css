@@ -9,6 +9,37 @@
   --paper: #faf8f3;
   --shadow: 0 24px 70px rgba(43, 38, 30, .16);
   --soft-shadow: 0 12px 30px rgba(43, 38, 30, .09);
+  --card-grid-columns: 3;
+  --card-grid-row-gap: 24px;
+  --card-grid-column-gap: 16px;
+  --card-width: 106px;
+  --card-aspect-ratio: 1;
+  --card-radius: 25%;
+  --card-border-width: 1px;
+  --card-border-style: solid;
+  --card-border-color: rgba(255,255,255,.24);
+  --card-shadow: 0 12px 25px color-mix(in srgb, var(--icon-bg, #34322f) 24%, transparent), inset 0 1px rgba(255,255,255,.25);
+  --card-icon-margin: 0 auto 10px;
+  --card-icon-padding: 0px;
+  --card-icon-transform: none;
+  --card-image-fit: cover;
+  --card-image-radius: 0px;
+  --card-image-filter: none;
+  --card-image-opacity: 1;
+  --card-copy-position: static;
+  --card-copy-inset: auto;
+  --card-copy-padding: 0px;
+  --card-copy-background: transparent;
+  --card-text-align: center;
+  --card-title-color: var(--ink);
+  --card-title-size: 13px;
+  --card-title-weight: 600;
+  --card-title-line-height: 1.35;
+  --card-subtitle-color: var(--muted);
+  --card-subtitle-size: 10px;
+  --card-decoration-line-display: none;
+  --card-inner-frame-display: none;
+  --card-highlight-display: none;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -90,16 +121,19 @@ button { cursor: pointer; }
 .filter-bar button { flex: 0 0 auto; height: 31px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-size: 11px; }
 .filter-bar button.active { border-color: var(--ink); background: var(--ink); color: var(--bg); }
 
-.app-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px 16px; }
-.app-card { position: relative; min-width: 0; text-align: center; animation: rise .35s both; }
-.app-card button { width: 100%; border: 0; background: transparent; padding: 0; }
-.app-icon { position: relative; width: min(100%, 106px); aspect-ratio: 1; margin: 0 auto 10px; overflow: hidden; border: 1px solid rgba(255,255,255,.24); border-radius: 25%; background: var(--icon-bg, #34322f); box-shadow: 0 12px 25px color-mix(in srgb, var(--icon-bg, #34322f) 24%, transparent), inset 0 1px rgba(255,255,255,.25); color: var(--icon-fg, #fff); }
-.app-icon::before { content: ""; position: absolute; width: 72%; height: 72%; right: -21%; bottom: -24%; border: 1px solid currentColor; border-radius: 50%; opacity: .25; }
-.app-icon::after { content: ""; position: absolute; inset: 8%; border: 1px solid rgba(255,255,255,.25); border-radius: 19%; }
-.app-icon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.app-grid { display: grid; grid-template-columns: repeat(var(--card-grid-columns), minmax(0, 1fr)); row-gap: var(--card-grid-row-gap); column-gap: var(--card-grid-column-gap); }
+.app-card { position: relative; min-width: 0; text-align: var(--card-text-align); transform: var(--card-item-transform, none); animation: rise .35s var(--card-animation-delay, 0ms) both; }
+.app-card > button { position: relative; width: 100%; border: 0; background: transparent; padding: 0; text-align: inherit; }
+.app-icon { position: relative; isolation: isolate; display: block; width: min(100%, var(--card-width)); aspect-ratio: var(--card-aspect-ratio); margin: var(--card-icon-margin); padding: var(--card-icon-padding); overflow: hidden; border-width: var(--card-border-width); border-style: var(--card-border-style); border-color: var(--card-border-color); border-radius: var(--card-radius); background: var(--icon-bg, #34322f); box-shadow: var(--card-shadow); color: var(--icon-fg, #fff); transform: var(--card-icon-transform); }
+.app-icon img { position: absolute; z-index: 0; inset: var(--card-icon-padding); width: auto; height: auto; border-radius: var(--card-image-radius); object-fit: var(--card-image-fit); filter: var(--card-image-filter); opacity: var(--card-image-opacity); }
 .app-glyph { position: relative; z-index: 1; height: 100%; display: grid; place-items: center; font-family: Georgia, "Noto Serif SC", serif; font-size: clamp(30px, 10vw, 43px); font-weight: 400; text-transform: uppercase; }
-.app-card strong { display: block; overflow: visible !important; color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; text-overflow: clip !important; white-space: normal !important; }
-.app-card small { display: block; overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.card-decoration { position: absolute; z-index: 2; inset: 0; overflow: hidden; border-radius: inherit; pointer-events: none; }
+.card-decoration-line { position: absolute; display: var(--card-decoration-line-display); inset: var(--card-decoration-line-inset, 12% auto 12% 50%); width: var(--card-decoration-line-width, 1px); border: var(--card-decoration-line-border, 0); border-radius: var(--card-decoration-line-radius, 999px); background: var(--card-decoration-line-background, currentColor); box-shadow: var(--card-decoration-line-shadow, none); opacity: var(--card-decoration-line-opacity, .3); transform: var(--card-decoration-line-transform, none); }
+.card-inner-frame { position: absolute; display: var(--card-inner-frame-display); inset: var(--card-inner-frame-inset, 8%); border: var(--card-inner-frame-border, 1px solid rgba(255,255,255,.25)); border-radius: var(--card-inner-frame-radius, 19%); background: var(--card-inner-frame-background, transparent); box-shadow: var(--card-inner-frame-shadow, none); opacity: var(--card-inner-frame-opacity, 1); }
+.card-highlight { position: absolute; display: var(--card-highlight-display); inset: var(--card-highlight-inset, 0); border-radius: var(--card-highlight-radius, inherit); background: var(--card-highlight-background, linear-gradient(145deg, rgba(255,255,255,.3), transparent 45%)); box-shadow: var(--card-highlight-shadow, inset 0 1px rgba(255,255,255,.35)); opacity: var(--card-highlight-opacity, 1); mix-blend-mode: var(--card-highlight-blend, normal); }
+.card-copy { position: var(--card-copy-position); inset: var(--card-copy-inset); display: block; padding: var(--card-copy-padding); border-radius: var(--card-copy-radius, 0); background: var(--card-copy-background); backdrop-filter: var(--card-copy-backdrop, none); }
+.app-card strong { display: block; overflow: visible; color: var(--card-title-color); font-size: var(--card-title-size); font-weight: var(--card-title-weight); line-height: var(--card-title-line-height); overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
+.app-card small { display: block; overflow: hidden; margin-top: var(--card-subtitle-margin-top, 3px); color: var(--card-subtitle-color); font-size: var(--card-subtitle-size); text-overflow: var(--card-subtitle-overflow, ellipsis); white-space: var(--card-subtitle-white-space, nowrap); }
 .favorite-star { position: absolute; z-index: 3; top: 8px; right: 9px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(20,19,17,.58); color: #fff5c8; font-size: 11px; font-style: normal; backdrop-filter: blur(8px); }
 .selection-mark { position: absolute; z-index: 4; top: 8px; right: 8px; display: none; place-items: center; width: 24px; height: 24px; border: 1px solid rgba(255,255,255,.75); border-radius: 50%; background: rgba(15,14,12,.35); color: white; font-size: 13px; font-style: normal; }
 .app-card.is-selecting .selection-mark { display: grid; }
@@ -342,19 +376,7 @@ button { cursor: pointer; }
 .data-summary { margin-bottom: 14px; padding: 17px; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); }.data-summary strong, .data-summary span { display: block; }.data-summary strong { font-size: 15px; }.data-summary span { margin-top: 6px; color: var(--muted); font-size: 10px; }.stack-actions { display: grid; gap: 9px; }.stack-actions button, .full-button { width: 100%; min-height: 46px; }
 .version-item { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); }.version-item strong, .version-item small { display: block; }.version-item strong { font-size: 11px; }.version-item small { margin-top: 4px; color: var(--muted); font-size: 9px; }.version-item button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); }
 .reorder-list { display: grid; gap: 7px; }.reorder-item { display: grid; grid-template-columns: 24px 42px minmax(0,1fr) auto; align-items: center; gap: 9px; min-height: 56px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); }.reorder-item .drag-grip { color: var(--muted); cursor: grab; letter-spacing: -4px; }.reorder-item .mini-icon { width: 42px; height: 42px; border-radius: 12px; }.reorder-item strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.reorder-buttons { display: flex; gap: 4px; }.reorder-buttons button { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg-elevated); color: var(--ink); }.reorder-buttons button:disabled { opacity: .3; }
-:root[data-grid-density="2"] .app-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }:root[data-grid-density="4"] .app-grid { grid-template-columns: repeat(4, minmax(0,1fr)); gap: 22px 8px; }:root[data-grid-density="4"] .app-card strong { font-size: 9px; }:root[data-grid-density="4"] .app-card small, :root[data-grid-density="4"] .card-badges { display: none; }
-
-/* 所有主题共用：去掉 HTML 应用图标里贯穿上下的装饰线。 */
-.app-card::before,
-.app-card > button::before,
-.app-card > button::after,
-.app-card .app-icon::before,
-.app-card .app-icon::after,
-.app-card .app-glyph::before,
-.app-card .app-glyph::after {
-  content: none !important;
-  display: none !important;
-}
+:root[data-grid-density="2"] .app-grid { --card-grid-columns: 2; }:root[data-grid-density="4"] .app-grid { --card-grid-columns: 4; --card-grid-row-gap: 22px; --card-grid-column-gap: 8px; }:root[data-grid-density="4"] .app-card strong { --card-title-size: 9px; }:root[data-grid-density="4"] .app-card small, :root[data-grid-density="4"] .card-badges { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
