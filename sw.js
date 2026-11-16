@@ -1,4 +1,4 @@
-const CACHE = "lijian-shell-v7";
+const CACHE = "lijian-shell-v10";
 const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -19,3 +19,4 @@ self.addEventListener("fetch", (event) => {
     }).catch(() => caches.match(event.request).then((cached) => cached || caches.match("./index.html")))
   );
 });
+

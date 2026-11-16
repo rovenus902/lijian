@@ -98,7 +98,7 @@ button { cursor: pointer; }
 .app-icon::after { content: ""; position: absolute; inset: 8%; border: 1px solid rgba(255,255,255,.25); border-radius: 19%; }
 .app-icon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .app-glyph { position: relative; z-index: 1; height: 100%; display: grid; place-items: center; font-family: Georgia, "Noto Serif SC", serif; font-size: clamp(30px, 10vw, 43px); font-weight: 400; text-transform: uppercase; }
-.app-card strong { display: block; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.app-card strong { display: block; overflow: visible !important; color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; text-overflow: clip !important; white-space: normal !important; }
 .app-card small { display: block; overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .favorite-star { position: absolute; z-index: 3; top: 8px; right: 9px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(20,19,17,.58); color: #fff5c8; font-size: 11px; font-style: normal; backdrop-filter: blur(8px); }
 .selection-mark { position: absolute; z-index: 4; top: 8px; right: 8px; display: none; place-items: center; width: 24px; height: 24px; border: 1px solid rgba(255,255,255,.75); border-radius: 50%; background: rgba(15,14,12,.35); color: white; font-size: 13px; font-style: normal; }
@@ -327,14 +327,13 @@ button { cursor: pointer; }
 }
 
 /* 里间 v5 */
-.hero { position: relative; padding-bottom: 72px; }
+.hero { position: relative; }
 .room-mark { position: relative; display: inline-block; overflow: hidden; width: 37px; height: 37px; border: 1px solid currentColor; border-radius: 11px; background: var(--paper); box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--paper) 75%, transparent); }
 .room-mark::before, .room-mark::after, .room-mark i, .room-mark b { content: ""; position: absolute; display: block; }
 .room-mark::before { inset: 7px 8px 7px 7px; border: 1.5px solid currentColor; border-radius: 5px; }
 .room-mark::after { top: 7px; bottom: 7px; left: 18px; width: 1.5px; background: currentColor; box-shadow: 5px 0 color-mix(in srgb, currentColor 45%, transparent); }
 .room-mark i { width: 4px; height: 4px; right: 9px; top: 16px; border-radius: 50%; background: currentColor; }.room-mark b { inset: 0; background: linear-gradient(135deg, transparent 53%, color-mix(in srgb, #c69b55 32%, transparent)); }
 .login-mark.room-mark { display: block; width: 50px; height: 50px; }.login-mark.room-mark::after { left: 24px; }.login-mark.room-mark i { right: 11px; top: 22px; }
-.continue-button { position: absolute; left: 5px; right: 5px; bottom: 10px; min-width: 0; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--bg-elevated) 88%, transparent); color: var(--ink); text-align: left; backdrop-filter: blur(16px); }.continue-button small { color: var(--muted); font-size: 9px; }.continue-button strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.continue-button span { font-size: 18px; }
 .scrim.over-viewer { z-index: 101; }.sheet.over-viewer { z-index: 102; }
 .viewer-menu, .switcher { position: absolute; z-index: 98; inset: 0; }.viewer-menu-scrim { position: absolute; inset: 0; width: 100%; border: 0; background: rgba(12,11,10,.42); backdrop-filter: blur(7px); }
 .viewer-menu-card, .switcher-card { position: absolute; left: 50%; bottom: 0; width: min(100%, 620px); max-height: min(82dvh, 700px); overflow-y: auto; padding: 0 18px calc(var(--safe-bottom) + 18px); transform: translateX(-50%); border: 1px solid var(--line); border-bottom: 0; border-radius: 30px 30px 0 0; background: var(--bg-elevated); box-shadow: var(--shadow); animation: sheetUp .28s cubic-bezier(.2,.75,.25,1); }
@@ -345,6 +344,19 @@ button { cursor: pointer; }
 .reorder-list { display: grid; gap: 7px; }.reorder-item { display: grid; grid-template-columns: 24px 42px minmax(0,1fr) auto; align-items: center; gap: 9px; min-height: 56px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 15px; background: var(--paper); }.reorder-item .drag-grip { color: var(--muted); cursor: grab; letter-spacing: -4px; }.reorder-item .mini-icon { width: 42px; height: 42px; border-radius: 12px; }.reorder-item strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.reorder-buttons { display: flex; gap: 4px; }.reorder-buttons button { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg-elevated); color: var(--ink); }.reorder-buttons button:disabled { opacity: .3; }
 :root[data-grid-density="2"] .app-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }:root[data-grid-density="4"] .app-grid { grid-template-columns: repeat(4, minmax(0,1fr)); gap: 22px 8px; }:root[data-grid-density="4"] .app-card strong { font-size: 9px; }:root[data-grid-density="4"] .app-card small, :root[data-grid-density="4"] .card-badges { display: none; }
 
+/* 所有主题共用：去掉 HTML 应用图标里贯穿上下的装饰线。 */
+.app-card::before,
+.app-card > button::before,
+.app-card > button::after,
+.app-card .app-icon::before,
+.app-card .app-icon::after,
+.app-card .app-glyph::before,
+.app-card .app-glyph::after {
+  content: none !important;
+  display: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+

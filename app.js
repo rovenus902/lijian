@@ -21,7 +21,8 @@ const state = {
   deferredInstall: null, filter: { type: "all", value: "" },
   multiSelect: false, selected: new Set(), lockTimer: null,
   themes: [], activeTheme: null, appliedThemeVariables: [],
-  runtimeSaveChain: Promise.resolve(), viewerPreferences: {}, effectiveViewerZoom: 1,
+  runtimeSaveChain: Promise.resolve(), activeRuntimeSession: null,
+  viewerPreferences: {}, effectiveViewerZoom: 1,
   editingOriginal: null, dataTargetId: null, reorderDraft: [], previewThemeId: null,
   demo: new URLSearchParams(location.search).has("demo")
 };
@@ -294,7 +295,7 @@ function queueRuntimeStateSave(id, payload) {
     .catch((error) => console.warn("Page Vault state save failed", error));
 }
 
-function pageVaultRuntimeBridge(initialState, appId) {
+function pageVaultRuntimeBridge(initialState, appId, runtimeSession) {
   "use strict";
   const CHANNEL = "page-vault-runtime-v1";
   const initial = initialState && typeof initialState === "object" ? initialState : {};
@@ -315,7 +316,7 @@ function pageVaultRuntimeBridge(initialState, appId) {
   }
 
   function post(type, payload) {
-    parent.postMessage({ channel: CHANNEL, type, appId, payload }, "*");
+    parent.postMessage({ channel: CHANNEL, type, appId, runtimeSession, payload }, "*");
   }
 
   function clampZoom(value) {
@@ -504,8 +505,8 @@ function pageVaultRuntimeBridge(initialState, appId) {
   new MutationObserver(() => restoreForm(true)).observe(document.documentElement, { childList: true, subtree: true });
 }
 
-function buildRuntimeDocument(html, appId, runtimeState) {
-  const source = `;(${pageVaultRuntimeBridge.toString()})(${JSON.stringify(runtimeState).replace(/</g, "\\u003c")},${JSON.stringify(appId)});`;
+function buildRuntimeDocument(html, appId, runtimeState, runtimeSession) {
+  const source = `;(${pageVaultRuntimeBridge.toString()})(${JSON.stringify(runtimeState).replace(/</g, "\\u003c")},${JSON.stringify(appId)},${JSON.stringify(runtimeSession)});`;
   const script = `<script>${source.replace(/<\/script/gi, "<\\/script")}<\/script>`;
   if (/<head(?:\s[^>]*)?>/i.test(html)) return html.replace(/<head(?:\s[^>]*)?>/i, (match) => `${match}${script}`);
   if (/<html(?:\s[^>]*)?>/i.test(html)) return html.replace(/<html(?:\s[^>]*)?>/i, (match) => `${match}<head>${script}</head>`);
@@ -640,6 +641,7 @@ window.addEventListener("message", (event) => {
   const message = event.data;
   if (message?.channel !== "page-vault-runtime-v1") return;
   if (!state.activeApp?.id || message.appId !== state.activeApp.id) return;
+  if (!state.activeRuntimeSession || message.runtimeSession !== state.activeRuntimeSession) return;
   if (message.type === "save") {
     try { queueRuntimeStateSave(message.appId, message.payload); }
     catch (error) { console.warn("Page Vault rejected app state", error); }
@@ -749,10 +751,6 @@ function syncCollections() {
   state.apps = sortApps(state.records.filter((record) => !record.deletedAt));
   state.trash = [...state.records.filter((record) => record.deletedAt)].sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
   $("#trashCount").textContent = `${state.trash.length} 个项目`;
-  const lastId = localStorage.getItem(LAST_APP_KEY);
-  const last = state.apps.find((app) => app.id === lastId);
-  $("#continueButton").hidden = !last;
-  $("#continueTitle").textContent = last?.title || "";
 }
 
 function filteredApps() {
@@ -948,11 +946,13 @@ async function openViewer(id) {
     const record = await getFullApp(id); const openedAt = new Date().toISOString();
     const runtimeState = await getRuntimeState(id);
     record.lastOpenedAt = openedAt; state.activeApp = record;
+    const runtimeSession = crypto.randomUUID();
+    state.activeRuntimeSession = runtimeSession;
     localStorage.setItem(LAST_APP_KEY, id);
     await updateApp(id, { lastOpenedAt: openedAt, _touchOnly: true });
     state.effectiveViewerZoom = viewerPreferencesFor(id).zoom / 100;
     $("#viewerTitle").textContent = record.title;
-    $("#appFrame").srcdoc = buildRuntimeDocument(record.html, id, runtimeState);
+    $("#appFrame").srcdoc = buildRuntimeDocument(record.html, id, runtimeState, runtimeSession);
     $("#viewer").hidden = false; document.body.style.overflow = "hidden";
     applyViewerPreferences();
     requestAnimationFrame(updateLandscapePreview);
@@ -968,7 +968,32 @@ async function closeViewer() {
     await state.runtimeSaveChain;
   }
   closeViewerControls(); closeViewerMenu(); closeSwitcher(); setImmersive(false);
+  state.activeRuntimeSession = null;
   $("#viewer").hidden = true; frame.srcdoc = ""; document.body.style.overflow = "";
+}
+
+async function clearRuntimeStateAndRefresh(id) {
+  if (!id) return;
+  const viewerOpen = !$("#viewer").hidden && state.activeApp?.id === id;
+  const frame = $("#appFrame");
+
+  if (viewerOpen) {
+    state.activeRuntimeSession = `clearing-${crypto.randomUUID()}`;
+    frame.srcdoc = "";
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+
+  await state.runtimeSaveChain.catch(() => {});
+  await deleteRuntimeState(id);
+
+  if (viewerOpen) {
+    const record = await getFullApp(id);
+    const runtimeSession = crypto.randomUUID();
+    state.activeRuntimeSession = runtimeSession;
+    frame.srcdoc = buildRuntimeDocument(record.html, id, normalizeRuntimeState(id), runtimeSession);
+    applyViewerPreferences();
+    requestAnimationFrame(updateLandscapePreview);
+  }
 }
 
 function openActions(id) {
@@ -1068,7 +1093,8 @@ async function clearManagedAppData() {
   const id = state.dataTargetId; if (!id) return;
   const app = state.apps.find((item) => item.id === id) || state.activeApp;
   if (!confirm(`清空“${app?.title || "这个应用"}”保存的数据吗？`)) return;
-  await deleteRuntimeState(id); toast("应用数据已清空"); closeSheets();
+  await clearRuntimeStateAndRefresh(id);
+  toast("应用数据已清空，页面已重新载入"); closeSheets();
 }
 
 async function openVersions(id) {
@@ -1128,7 +1154,7 @@ async function handleAction(action) {
   }
   if (action === "clear-data") {
     if (!confirm(`清除“${app.title}”在里间里自动保存的填写内容和页面数据吗？HTML 本身不会删除。`)) return;
-    try { await deleteRuntimeState(app.id); toast("应用数据已清除"); }
+    try { await clearRuntimeStateAndRefresh(app.id); toast("应用数据已清除"); }
     catch { toast("刚才没有清除成功"); }
     return;
   }
@@ -1445,7 +1471,6 @@ $("#loginForm").addEventListener("submit", async (event) => {
 });
 $("#showPassword").addEventListener("click", () => { const input = $("#passwordInput"); input.type = input.type === "password" ? "text" : "password"; });
 [$("#addHeroButton"), $("#floatingAdd"), $("#emptyState")].forEach((button) => button.addEventListener("click", () => openEditor()));
-$("#continueButton").addEventListener("click", () => { const id = localStorage.getItem(LAST_APP_KEY); if (id) openViewer(id); });
 $("#settingsButton").addEventListener("click", () => showSheet($("#settingsSheet")));
 $("#scrim").addEventListener("click", closeSheets); $$("[data-close-sheet]").forEach((button) => button.addEventListener("click", closeSheets));
 $("#uploadZone").addEventListener("click", () => $("#fileInput").click()); $("#fileInput").addEventListener("change", (event) => readFile(event.target.files[0]));
@@ -1545,3 +1570,4 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 if ("serviceWorker" in navigator && !state.demo) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
 installPwaRescueGesture();
 init();
+
