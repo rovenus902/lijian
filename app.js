@@ -11,13 +11,14 @@ const THEME_KEY = "page-vault-theme";
 const LOCK_TIMEOUT_KEY = "page-vault-lock-timeout";
 const LAST_ACTIVITY_KEY = "page-vault-last-activity";
 const ACTIVE_THEME_KEY = "page-vault-active-custom-theme";
+const VIEWER_PREFS_KEY = "page-vault-viewer-preferences-v1";
 
 const state = {
   records: [], apps: [], trash: [], activeApp: null, editingId: null,
   deferredInstall: null, filter: { type: "all", value: "" },
   multiSelect: false, selected: new Set(), lockTimer: null,
   themes: [], activeTheme: null, appliedThemeVariables: [],
-  runtimeSaveChain: Promise.resolve(),
+  runtimeSaveChain: Promise.resolve(), viewerPreferences: {}, effectiveViewerZoom: 1,
   demo: new URLSearchParams(location.search).has("demo")
 };
 
@@ -289,6 +290,7 @@ function pageVaultRuntimeBridge(initialState, appId) {
   let formState = initial.form && typeof initial.form === "object" ? initial.form : {};
   let customState = initial.custom ?? null;
   let scrollState = initial.scroll && typeof initial.scroll === "object" ? initial.scroll : { x: 0, y: 0 };
+  let displaySettings = { zoom: 1, fitWidth: false, scrollLocked: false };
   let saveTimer = 0;
   let restoring = false;
   const storageData = {};
@@ -304,6 +306,64 @@ function pageVaultRuntimeBridge(initialState, appId) {
   function post(type, payload) {
     parent.postMessage({ channel: CHANNEL, type, appId, payload }, "*");
   }
+
+  function clampZoom(value) {
+    const number = Number(value);
+    return Math.min(2, Math.max(.5, Number.isFinite(number) ? number : 1));
+  }
+
+  function displayLockStyle() {
+    let style = document.getElementById("page-vault-display-lock");
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "page-vault-display-lock";
+      (document.head || document.documentElement).appendChild(style);
+    }
+    return style;
+  }
+
+  function naturalDocumentWidth() {
+    const root = document.documentElement;
+    const body = document.body;
+    return Math.max(
+      window.innerWidth || 0,
+      root?.scrollWidth || 0, root?.offsetWidth || 0,
+      body?.scrollWidth || 0, body?.offsetWidth || 0
+    );
+  }
+
+  function applyDisplaySettings() {
+    const root = document.documentElement;
+    if (!root) return;
+    root.style.zoom = "1";
+    const naturalWidth = naturalDocumentWidth();
+    const requestedZoom = clampZoom(displaySettings.zoom);
+    const fitZoom = naturalWidth > 0 ? Math.min(1, (window.innerWidth || naturalWidth) / naturalWidth) : 1;
+    const effectiveZoom = displaySettings.fitWidth ? Math.min(1, Math.max(.1, fitZoom)) : requestedZoom;
+    root.style.zoom = String(effectiveZoom);
+    displayLockStyle().textContent = displaySettings.scrollLocked
+      ? "html,body{overflow:hidden!important;overscroll-behavior:none!important;}"
+      : "";
+    post("display-state", {
+      effectiveZoom,
+      naturalWidth,
+      fitWidth: Boolean(displaySettings.fitWidth),
+      scrollLocked: Boolean(displaySettings.scrollLocked)
+    });
+  }
+
+  function blockLockedScroll(event) {
+    if (!displaySettings.scrollLocked) return;
+    if (event.type === "keydown") {
+      const editable = event.target?.matches?.("input,textarea,select,[contenteditable]");
+      if (editable || !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
+    }
+    event.preventDefault();
+  }
+
+  document.addEventListener("touchmove", blockLockedScroll, { passive: false, capture: true });
+  document.addEventListener("wheel", blockLockedScroll, { passive: false, capture: true });
+  document.addEventListener("keydown", blockLockedScroll, { capture: true });
 
   const storage = {
     key(index) { return Object.keys(storageData)[Number(index)] ?? null; },
@@ -402,8 +462,20 @@ function pageVaultRuntimeBridge(initialState, appId) {
   document.addEventListener("scroll", () => scheduleSave(), true);
   window.addEventListener("pagehide", flush);
   window.addEventListener("message", (event) => {
-    if (event.data?.channel === CHANNEL && event.data?.type === "flush") flush();
+    if (event.data?.channel !== CHANNEL) return;
+    if (event.data.type === "flush") flush();
+    if (event.data.type === "display") {
+      const payload = event.data.payload && typeof event.data.payload === "object" ? event.data.payload : {};
+      displaySettings = {
+        zoom: clampZoom(payload.zoom),
+        fitWidth: Boolean(payload.fitWidth),
+        scrollLocked: Boolean(payload.scrollLocked)
+      };
+      applyDisplaySettings();
+      requestAnimationFrame(applyDisplaySettings);
+    }
   });
+  window.addEventListener("resize", () => { if (displaySettings.fitWidth) applyDisplaySettings(); });
 
   function restoreAll() {
     restoreForm();
@@ -413,6 +485,7 @@ function pageVaultRuntimeBridge(initialState, appId) {
     setTimeout(restoreScroll, 260);
     window.dispatchEvent(new CustomEvent("pagevaultrestore", { detail: clone(customState) }));
     post("ready", { restored: true });
+    applyDisplaySettings();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", restoreAll, { once: true });
@@ -429,14 +502,142 @@ function buildRuntimeDocument(html, appId, runtimeState) {
   return `${script}${html}`;
 }
 
+function normalizeViewerPreferences(value) {
+  const input = value && typeof value === "object" ? value : {};
+  const zoom = Math.round(Math.min(200, Math.max(50, Number(input.zoom) || 100)) / 5) * 5;
+  return {
+    zoom,
+    fitWidth: Boolean(input.fitWidth),
+    landscape: Boolean(input.landscape),
+    scrollLocked: Boolean(input.scrollLocked)
+  };
+}
+
+function loadViewerPreferences() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(VIEWER_PREFS_KEY) || "{}");
+    state.viewerPreferences = stored && typeof stored === "object" ? stored : {};
+  } catch { state.viewerPreferences = {}; }
+}
+
+function viewerPreferencesFor(id = state.activeApp?.id) {
+  return normalizeViewerPreferences(id ? state.viewerPreferences[id] : null);
+}
+
+function saveViewerPreferences(id, preferences) {
+  if (!id) return;
+  state.viewerPreferences[id] = normalizeViewerPreferences(preferences);
+  try { localStorage.setItem(VIEWER_PREFS_KEY, JSON.stringify(state.viewerPreferences)); }
+  catch { toast("显示设置暂时无法保存"); }
+}
+
+function postViewerDisplay() {
+  const frame = $("#appFrame");
+  const preferences = viewerPreferencesFor();
+  frame.contentWindow?.postMessage({
+    channel: "page-vault-runtime-v1",
+    type: "display",
+    payload: {
+      zoom: preferences.zoom / 100,
+      fitWidth: preferences.fitWidth,
+      scrollLocked: preferences.scrollLocked
+    }
+  }, "*");
+}
+
+function updateLandscapePreview() {
+  const stage = $("#viewerStage");
+  const shell = $("#viewerFrameShell");
+  const landscape = viewerPreferencesFor().landscape;
+  stage.classList.toggle("landscape", landscape);
+  if (!landscape) {
+    stage.style.removeProperty("--landscape-scale");
+    shell.style.removeProperty("width");
+    shell.style.removeProperty("height");
+    return;
+  }
+  const width = 844;
+  const height = 390;
+  const scale = Math.min(1, Math.max(.2, (stage.clientWidth - 28) / width, 0), Math.max(.2, (stage.clientHeight - 28) / height, 0));
+  stage.style.setProperty("--landscape-scale", String(scale));
+  shell.style.width = `${Math.round(width * scale)}px`;
+  shell.style.height = `${Math.round(height * scale)}px`;
+}
+
+function renderViewerControls() {
+  const preferences = viewerPreferencesFor();
+  const effective = preferences.fitWidth ? Math.round(state.effectiveViewerZoom * 100) : preferences.zoom;
+  $("#viewerDisplayButton").textContent = preferences.fitWidth ? "适宽" : `${preferences.zoom}%`;
+  $("#viewerDisplayButton").setAttribute("aria-label", `页面显示设置，当前${preferences.fitWidth ? `自动适宽 ${effective}%` : `${preferences.zoom}%`}`);
+  $("#zoomValue").textContent = `${effective}%`;
+  $("#zoomResetButton small").textContent = preferences.fitWidth ? "自动适宽" : "点按复原";
+  $("#zoomRange").value = String(preferences.zoom);
+  $("#fitWidthButton").setAttribute("aria-pressed", String(preferences.fitWidth));
+  $("#landscapeButton").setAttribute("aria-pressed", String(preferences.landscape));
+  $("#scrollLockButton").setAttribute("aria-pressed", String(preferences.scrollLocked));
+  $$("#zoomPresets [data-zoom]").forEach((button) => {
+    button.classList.toggle("active", !preferences.fitWidth && Number(button.dataset.zoom) === preferences.zoom);
+  });
+  $("#viewerMode").textContent = preferences.scrollLocked ? "页面滑动已锁定 · 本机自动保存" : "可滑动 · 本机自动保存";
+}
+
+function applyViewerPreferences({ persist = false } = {}) {
+  const id = state.activeApp?.id;
+  if (!id) return;
+  const preferences = viewerPreferencesFor(id);
+  if (persist) saveViewerPreferences(id, preferences);
+  renderViewerControls();
+  updateLandscapePreview();
+  postViewerDisplay();
+}
+
+function updateViewerPreference(changes) {
+  const id = state.activeApp?.id;
+  if (!id) return;
+  const preferences = { ...viewerPreferencesFor(id), ...changes };
+  saveViewerPreferences(id, preferences);
+  applyViewerPreferences();
+}
+
+function setViewerZoom(value) {
+  const zoom = Math.round(Math.min(200, Math.max(50, Number(value) || 100)) / 5) * 5;
+  state.effectiveViewerZoom = zoom / 100;
+  updateViewerPreference({ zoom, fitWidth: false });
+}
+
+function openViewerControls() {
+  renderViewerControls();
+  $("#viewerControls").hidden = false;
+  $("#viewerDisplayButton").setAttribute("aria-expanded", "true");
+}
+
+function closeViewerControls() {
+  $("#viewerControls").hidden = true;
+  $("#viewerDisplayButton").setAttribute("aria-expanded", "false");
+}
+
+function setImmersive(enabled) {
+  closeViewerControls();
+  $("#viewer").classList.toggle("immersive", Boolean(enabled));
+  $("#immersiveExit").hidden = !enabled;
+  requestAnimationFrame(updateLandscapePreview);
+}
+
 window.addEventListener("message", (event) => {
   const frame = $("#appFrame");
   if (!frame || event.source !== frame.contentWindow) return;
   const message = event.data;
-  if (message?.channel !== "page-vault-runtime-v1" || message.type !== "save") return;
+  if (message?.channel !== "page-vault-runtime-v1") return;
   if (!state.activeApp?.id || message.appId !== state.activeApp.id) return;
-  try { queueRuntimeStateSave(message.appId, message.payload); }
-  catch (error) { console.warn("Page Vault rejected app state", error); }
+  if (message.type === "save") {
+    try { queueRuntimeStateSave(message.appId, message.payload); }
+    catch (error) { console.warn("Page Vault rejected app state", error); }
+  }
+  if (message.type === "ready") postViewerDisplay();
+  if (message.type === "display-state") {
+    state.effectiveViewerZoom = Number(message.payload?.effectiveZoom) || 1;
+    renderViewerControls();
+  }
 });
 
 async function digest(value) {
@@ -714,9 +915,13 @@ async function openViewer(id) {
     const runtimeState = await getRuntimeState(id);
     record.lastOpenedAt = openedAt; state.activeApp = record;
     await updateApp(id, { lastOpenedAt: openedAt, _touchOnly: true });
-    $("#viewerTitle").textContent = record.title; $("#viewerMode").textContent = "本机自动保存";
+    state.effectiveViewerZoom = viewerPreferencesFor(id).zoom / 100;
+    $("#viewerTitle").textContent = record.title;
     $("#appFrame").srcdoc = buildRuntimeDocument(record.html, id, runtimeState);
-    $("#viewer").hidden = false; document.body.style.overflow = "hidden"; renderApps();
+    $("#viewer").hidden = false; document.body.style.overflow = "hidden";
+    applyViewerPreferences();
+    requestAnimationFrame(updateLandscapePreview);
+    renderApps();
   } catch (error) { toast(friendlyError(error)); }
 }
 
@@ -727,6 +932,7 @@ async function closeViewer() {
     await new Promise((resolve) => setTimeout(resolve, 80));
     await state.runtimeSaveChain;
   }
+  closeViewerControls(); setImmersive(false);
   $("#viewer").hidden = true; frame.srcdoc = ""; document.body.style.overflow = "";
 }
 
@@ -850,7 +1056,7 @@ async function exportBackup() {
   try {
     const records = state.demo ? demoApps : (await withStore("readonly", (store) => store.getAll())).map(normalizeRecord);
     const appStates = state.demo ? [] : await withStore("readonly", (store) => store.getAll(), APP_STATE_STORE_NAME);
-    const backup = { format: "page-vault-backup", version: 3, exportedAt: new Date().toISOString(), apps: records, appStates };
+    const backup = { format: "page-vault-backup", version: 4, exportedAt: new Date().toISOString(), apps: records, appStates, viewerPreferences: state.viewerPreferences };
     downloadBlob(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" }), `page-vault-backup-${new Date().toISOString().slice(0, 10)}.json`);
     closeSheets(); toast(`已备份 ${records.length} 个项目和应用数据`);
   } catch { toast("备份生成失败"); }
@@ -864,6 +1070,10 @@ async function restoreBackup(file) {
     if (!confirm(`备份中有 ${data.apps.length} 个项目。相同项目会更新，继续恢复吗？`)) return;
     await putMany(data.apps);
     if (Array.isArray(data.appStates)) await putRuntimeStates(data.appStates);
+    if (data.viewerPreferences && typeof data.viewerPreferences === "object") {
+      state.viewerPreferences = { ...state.viewerPreferences, ...data.viewerPreferences };
+      localStorage.setItem(VIEWER_PREFS_KEY, JSON.stringify(state.viewerPreferences));
+    }
     await loadApps(); closeSheets(); toast("备份和应用数据已经恢复");
   } catch { toast("这不是有效的页匣备份"); }
   finally { $("#restoreInput").value = ""; }
@@ -1012,6 +1222,7 @@ function installPwaRescueGesture() {
 
 async function init() {
   $("#dateLabel").textContent = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date());
+  loadViewerPreferences();
   applyTheme(localStorage.getItem(THEME_KEY) || "system"); $("#lockTimeout").value = String(lockMinutes());
   if (hasLockExpired()) { sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(LAST_ACTIVITY_KEY); }
   try {
@@ -1041,6 +1252,31 @@ $("#searchInput").addEventListener("input", renderApps);
 $("#filterBar").addEventListener("click", (event) => { const button = event.target.closest("[data-filter-type]"); if (!button) return; state.filter = { type: button.dataset.filterType, value: button.dataset.filterValue }; renderApps(); });
 $$("[data-action]").forEach((button) => button.addEventListener("click", () => handleAction(button.dataset.action)));
 $("#closeViewer").addEventListener("click", closeViewer); $("#viewerMore").addEventListener("click", async () => { await closeViewer(); openActions(state.activeApp?.id); });
+$("#viewerDisplayButton").addEventListener("click", openViewerControls);
+[$("#viewerControlsScrim"), $("#closeViewerControls")].forEach((button) => button.addEventListener("click", closeViewerControls));
+$("#zoomOutButton").addEventListener("click", () => setViewerZoom(viewerPreferencesFor().zoom - 10));
+$("#zoomInButton").addEventListener("click", () => setViewerZoom(viewerPreferencesFor().zoom + 10));
+$("#zoomResetButton").addEventListener("click", () => setViewerZoom(100));
+$("#zoomRange").addEventListener("input", (event) => setViewerZoom(event.target.value));
+$("#zoomPresets").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-zoom]");
+  if (button) setViewerZoom(button.dataset.zoom);
+});
+$("#fitWidthButton").addEventListener("click", () => updateViewerPreference({ fitWidth: !viewerPreferencesFor().fitWidth }));
+$("#landscapeButton").addEventListener("click", () => updateViewerPreference({ landscape: !viewerPreferencesFor().landscape }));
+$("#scrollLockButton").addEventListener("click", () => {
+  const scrollLocked = !viewerPreferencesFor().scrollLocked;
+  updateViewerPreference({ scrollLocked });
+  toast(scrollLocked ? "页面滑动已锁定" : "页面可以滑动了");
+});
+$("#immersiveButton").addEventListener("click", () => setImmersive(true));
+$("#immersiveExit").addEventListener("click", () => setImmersive(false));
+window.addEventListener("resize", () => { if (!$("#viewer").hidden) requestAnimationFrame(updateLandscapePreview); });
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || $("#viewer").hidden) return;
+  if (!$("#viewerControls").hidden) closeViewerControls();
+  else if ($("#viewer").classList.contains("immersive")) setImmersive(false);
+});
 $$("[data-theme]").forEach((button) => button.addEventListener("click", () => applyTheme(button.dataset.theme)));
 $("#logoutButton").addEventListener("click", lockVault);
 $("#lockTimeout").addEventListener("change", (event) => { localStorage.setItem(LOCK_TIMEOUT_KEY, event.target.value); touchActivity(); toast("自动锁定时间已保存"); });
