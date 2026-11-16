@@ -1,6 +1,6 @@
 {
-  "name": "页匣 · HTML 应用桌面",
-  "short_name": "页匣",
+  "name": "里间 · 私人 HTML 应用室",
+  "short_name": "里间",
   "description": "把单文件 HTML 收进一块随时可以打开的私人应用桌面。",
   "id": "./",
   "start_url": "./",
@@ -13,7 +13,7 @@
     {
       "name": "安全模式",
       "short_name": "安全模式",
-      "description": "跳过自定义主题打开页匣",
+      "description": "跳过自定义主题打开里间",
       "url": "./?safe=1",
       "icons": [{ "src": "./icon-192.png", "sizes": "192x192", "type": "image/png" }]
     }

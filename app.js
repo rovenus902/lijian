@@ -12,6 +12,9 @@ const LOCK_TIMEOUT_KEY = "page-vault-lock-timeout";
 const LAST_ACTIVITY_KEY = "page-vault-last-activity";
 const ACTIVE_THEME_KEY = "page-vault-active-custom-theme";
 const VIEWER_PREFS_KEY = "page-vault-viewer-preferences-v1";
+const LAST_APP_KEY = "lijian-last-app";
+const GRID_DENSITY_KEY = "lijian-grid-density";
+const PREVIOUS_THEME_KEY = "lijian-previous-theme";
 
 const state = {
   records: [], apps: [], trash: [], activeApp: null, editingId: null,
@@ -19,6 +22,7 @@ const state = {
   multiSelect: false, selected: new Set(), lockTimer: null,
   themes: [], activeTheme: null, appliedThemeVariables: [],
   runtimeSaveChain: Promise.resolve(), viewerPreferences: {}, effectiveViewerZoom: 1,
+  editingOriginal: null, dataTargetId: null, reorderDraft: [], previewThemeId: null,
   demo: new URLSearchParams(location.search).has("demo")
 };
 
@@ -29,7 +33,7 @@ const palettes = [
 ];
 
 const demoApps = [
-  { id: "demo-1", title: "夜间手记", subtitle: "私人记录", folder: "日常", tags: ["常用"], favorite: true, themeColor: "#323039", icon: "", updatedAt: new Date().toISOString(), createdAt: new Date().toISOString(), lastOpenedAt: new Date().toISOString(), html: "<!doctype html><meta name='viewport' content='width=device-width'><style>body{margin:0;background:#17171b;color:#eee;font:16px system-ui;padding:40px}h1{font:42px Georgia;font-weight:400}p{color:#aaa;line-height:1.8}</style><h1>夜间手记</h1><p>这是一份存进页匣的 HTML。</p>" },
+  { id: "demo-1", title: "夜间手记", subtitle: "私人记录", folder: "日常", tags: ["常用"], favorite: true, themeColor: "#323039", icon: "", updatedAt: new Date().toISOString(), createdAt: new Date().toISOString(), lastOpenedAt: new Date().toISOString(), html: "<!doctype html><meta name='viewport' content='width=device-width'><style>body{margin:0;background:#17171b;color:#eee;font:16px system-ui;padding:40px}h1{font:42px Georgia;font-weight:400}p{color:#aaa;line-height:1.8}</style><h1>夜间手记</h1><p>这是一份存进里间的 HTML。</p>" },
   { id: "demo-2", title: "颜色标本", subtitle: "配色收藏", folder: "设计", tags: ["配色"], favorite: false, themeColor: "#5a3932", icon: "", updatedAt: new Date(Date.now() - 3600000).toISOString(), createdAt: new Date().toISOString(), html: "<!doctype html><meta name='viewport' content='width=device-width'><style>body{font-family:system-ui;padding:30px;background:#f1eee6}.c{height:90px;border-radius:20px;margin:15px;background:#5a3932}.c:nth-child(2){background:#243a3c}.c:nth-child(3){background:#d8c9ae}</style><div class=c></div><div class=c></div><div class=c></div>" },
   { id: "demo-3", title: "小小计时器", subtitle: "专注工具", folder: "工具", tags: ["计时"], favorite: false, themeColor: "#243a3c", icon: "", updatedAt: new Date(Date.now() - 7200000).toISOString(), createdAt: new Date().toISOString(), html: "<!doctype html><meta name='viewport' content='width=device-width'><style>body{display:grid;place-items:center;height:100vh;margin:0;background:#e9efeb;font-family:system-ui}.t{font:70px Georgia}</style><div class=t>25:00</div>" }
 ];
@@ -73,6 +77,13 @@ function normalizeRecord(record) {
     themeColor: String(record.themeColor || ""),
     folder: String(record.folder || "").trim().slice(0, 40),
     tags: normalizeTags(record.tags), favorite: Boolean(record.favorite),
+    order: Number.isFinite(Number(record.order)) ? Number(record.order) : Number.MAX_SAFE_INTEGER,
+    versions: Array.isArray(record.versions) ? record.versions.slice(0, 5).map((item) => ({
+      id: String(item.id || crypto.randomUUID()),
+      savedAt: item.savedAt || now,
+      title: String(item.title || record.title || "未命名应用").slice(0, 80),
+      html: String(item.html || "")
+    })).filter((item) => item.html) : [],
     lastOpenedAt: record.lastOpenedAt || null, deletedAt: record.deletedAt || null,
     createdAt: record.createdAt || now, updatedAt: record.updatedAt || now
   };
@@ -729,6 +740,7 @@ async function demoApi(path, options = {}) {
 function sortApps(apps) {
   return [...apps].sort((a, b) => {
     if (Boolean(a.favorite) !== Boolean(b.favorite)) return Number(b.favorite) - Number(a.favorite);
+    if (Number(a.order) !== Number(b.order)) return Number(a.order) - Number(b.order);
     return String(b.lastOpenedAt || b.updatedAt || b.createdAt).localeCompare(String(a.lastOpenedAt || a.updatedAt || a.createdAt));
   });
 }
@@ -737,6 +749,10 @@ function syncCollections() {
   state.apps = sortApps(state.records.filter((record) => !record.deletedAt));
   state.trash = [...state.records.filter((record) => record.deletedAt)].sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
   $("#trashCount").textContent = `${state.trash.length} 个项目`;
+  const lastId = localStorage.getItem(LAST_APP_KEY);
+  const last = state.apps.find((app) => app.id === lastId);
+  $("#continueButton").hidden = !last;
+  $("#continueTitle").textContent = last?.title || "";
 }
 
 function filteredApps() {
@@ -763,6 +779,13 @@ function renderFilterBar() {
     const active = state.filter.type === chip.type && state.filter.value === chip.value;
     return `<button class="${active ? "active" : ""}" type="button" data-filter-type="${chip.type}" data-filter-value="${escapeHTML(chip.value)}">${escapeHTML(chip.label)}</button>`;
   }).join("");
+}
+
+function applyGridDensity(value = localStorage.getItem(GRID_DENSITY_KEY) || "3") {
+  const density = ["2", "3", "4"].includes(String(value)) ? String(value) : "3";
+  document.documentElement.dataset.gridDensity = density;
+  localStorage.setItem(GRID_DENSITY_KEY, density);
+  if ($("#gridDensity")) $("#gridDensity").value = density;
 }
 
 function renderApps() {
@@ -813,12 +836,16 @@ async function loadApps() {
 
 function showSheet(element) {
   $$(".sheet").forEach((sheet) => { sheet.hidden = true; });
+  const overViewer = !$("#viewer").hidden;
+  element.classList.toggle("over-viewer", overViewer);
+  $("#scrim").classList.toggle("over-viewer", overViewer);
   $("#scrim").hidden = false; element.hidden = false; document.body.style.overflow = "hidden";
 }
 
 function closeSheets() {
   $$(".sheet").forEach((sheet) => { sheet.hidden = true; });
-  $("#scrim").hidden = true; document.body.style.overflow = "";
+  $("#scrim").hidden = true; $("#scrim").classList.remove("over-viewer");
+  document.body.style.overflow = $("#viewer").hidden ? "" : "hidden";
 }
 
 function updateIconPreview() {
@@ -830,6 +857,7 @@ function updateIconPreview() {
 
 function openEditor(record = null) {
   state.editingId = record?.id || null;
+  state.editingOriginal = record ? cloneJSON(record, null) : null;
   $("#editorTitle").textContent = record ? "编辑应用" : "放入新应用";
   $("#titleInput").value = record?.title || ""; $("#subtitleInput").value = record?.subtitle || "";
   $("#folderInput").value = record?.folder || ""; $("#tagsInput").value = (record?.tags || []).join(", ");
@@ -876,17 +904,23 @@ async function saveEditor() {
   const title = $("#titleInput").value.trim() || extractMeta(html).title || "未命名应用";
   if (!html.trim()) { $("#editorError").textContent = "还没有放入 HTML 内容。"; return; }
   const meta = extractMeta(html, title); const current = state.records.find((record) => record.id === state.editingId);
+  const original = state.editingOriginal;
+  const versions = [...(original?.versions || current?.versions || [])];
+  if (original?.html && original.html !== html) {
+    versions.unshift({ id: crypto.randomUUID(), savedAt: new Date().toISOString(), title: original.title, html: original.html });
+  }
   const payload = {
     title, subtitle: $("#subtitleInput").value.trim(), folder: $("#folderInput").value.trim(),
     tags: normalizeTags($("#tagsInput").value), html,
     icon: $("#htmlInput").dataset.icon || meta.icon, themeColor: $("#htmlInput").dataset.themeColor || meta.themeColor,
-    favorite: current?.favorite || false, lastOpenedAt: current?.lastOpenedAt || null
+    favorite: current?.favorite || false, lastOpenedAt: current?.lastOpenedAt || null,
+    order: current?.order ?? state.apps.length, versions: versions.slice(0, 5)
   };
   $("#saveButton").disabled = true;
   try {
     const path = state.editingId ? `./api/apps?id=${encodeURIComponent(state.editingId)}` : "./api/apps";
     const saved = await api(path, { method: state.editingId ? "PUT" : "POST", body: JSON.stringify(payload) });
-    upsertMeta(saved); closeSheets(); renderApps(); toast(state.editingId ? "修改已保存" : "已经放进页匣");
+    upsertMeta(saved); closeSheets(); renderApps(); toast(state.editingId ? "修改已保存" : "已经放进里间");
   } catch (error) { $("#editorError").textContent = friendlyError(error); }
   finally { $("#saveButton").disabled = false; }
 }
@@ -914,6 +948,7 @@ async function openViewer(id) {
     const record = await getFullApp(id); const openedAt = new Date().toISOString();
     const runtimeState = await getRuntimeState(id);
     record.lastOpenedAt = openedAt; state.activeApp = record;
+    localStorage.setItem(LAST_APP_KEY, id);
     await updateApp(id, { lastOpenedAt: openedAt, _touchOnly: true });
     state.effectiveViewerZoom = viewerPreferencesFor(id).zoom / 100;
     $("#viewerTitle").textContent = record.title;
@@ -932,7 +967,7 @@ async function closeViewer() {
     await new Promise((resolve) => setTimeout(resolve, 80));
     await state.runtimeSaveChain;
   }
-  closeViewerControls(); setImmersive(false);
+  closeViewerControls(); closeViewerMenu(); closeSwitcher(); setImmersive(false);
   $("#viewer").hidden = true; frame.srcdoc = ""; document.body.style.overflow = "";
 }
 
@@ -946,10 +981,133 @@ function openActions(id) {
   $("#favoriteActionText").textContent = app.favorite ? "取消收藏" : "收藏置顶"; showSheet($("#actionsSheet"));
 }
 
+function closeViewerMenu() { $("#viewerMenu").hidden = true; }
+function openViewerMenu() { $("#viewerMenu").hidden = false; }
+
+function closeSwitcher() { $("#switcher").hidden = true; }
+function openSwitcher() {
+  const recent = [...state.apps].sort((a, b) => String(b.lastOpenedAt || "").localeCompare(String(a.lastOpenedAt || "")));
+  $("#switcherList").innerHTML = recent.map((app) => {
+    const [bg] = paletteFor(app);
+    return `<button type="button" data-switch-id="${escapeHTML(app.id)}" class="${app.id === state.activeApp?.id ? "active" : ""}"><span class="mini-icon" style="--icon-bg:${bg}">${iconHTML(app)}</span><span><strong>${escapeHTML(app.title)}</strong><small>${escapeHTML(app.subtitle || "HTML 应用")}</small></span><i>›</i></button>`;
+  }).join("");
+  $("#switcher").hidden = false;
+}
+
+async function flushActiveViewer() {
+  const frame = $("#appFrame");
+  if (!$("#viewer").hidden && frame.contentWindow) {
+    frame.contentWindow.postMessage({ channel: "page-vault-runtime-v1", type: "flush" }, "*");
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    await state.runtimeSaveChain;
+  }
+}
+
+async function switchViewerApp(id) {
+  if (!id || id === state.activeApp?.id) { closeSwitcher(); return; }
+  await flushActiveViewer(); closeSwitcher(); state.activeApp = null; await openViewer(id);
+}
+
 function downloadRecord(record) { downloadBlob(new Blob([record.html], { type: "text/html;charset=utf-8" }), `${safeFileName(record.title)}.html`); }
 function downloadBlob(blob, name) {
   const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = name; link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+function formatBytes(bytes) {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(2)} MB`;
+}
+
+async function duplicateApp(id) {
+  const original = await getFullApp(id);
+  const now = new Date().toISOString();
+  const record = normalizeRecord({
+    ...original, id: crypto.randomUUID(), title: `${original.title} · 副本`, favorite: false,
+    lastOpenedAt: null, deletedAt: null, createdAt: now, updatedAt: now,
+    order: state.apps.length, versions: []
+  });
+  await withStore("readwrite", (store) => store.add(record));
+  upsertMeta(record); renderApps(); toast("已复制为独立应用");
+  return record;
+}
+
+async function openDataManager(id) {
+  const app = await getFullApp(id);
+  const runtime = await getRuntimeState(id);
+  state.dataTargetId = id;
+  const htmlBytes = new Blob([app.html]).size;
+  const dataBytes = new Blob([JSON.stringify(runtime)]).size;
+  $("#dataAppTitle").textContent = app.title;
+  $("#dataSize").textContent = `HTML ${formatBytes(htmlBytes)} · 保存数据 ${formatBytes(dataBytes)}`;
+  showSheet($("#dataSheet"));
+}
+
+async function exportAppData() {
+  const id = state.dataTargetId; if (!id) return;
+  const app = await getFullApp(id); const runtime = await getRuntimeState(id);
+  const payload = { format: "lijian-app-data", version: 1, exportedAt: new Date().toISOString(), appId: id, appTitle: app.title, runtime };
+  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" }), `${safeFileName(app.title)}-数据.lijian-data`);
+  toast("应用数据已导出");
+}
+
+async function importAppData(file) {
+  const id = state.dataTargetId; if (!id || !file) return;
+  try {
+    const payload = JSON.parse(await file.text());
+    if (payload?.format !== "lijian-app-data" || !payload.runtime) throw new Error("invalid_app_data");
+    await putRuntimeStates([{ ...payload.runtime, id }]);
+    toast("应用数据已导入"); closeSheets();
+  } catch { toast("这不是有效的里间应用数据"); }
+  finally { $("#dataImportInput").value = ""; }
+}
+
+async function clearManagedAppData() {
+  const id = state.dataTargetId; if (!id) return;
+  const app = state.apps.find((item) => item.id === id) || state.activeApp;
+  if (!confirm(`清空“${app?.title || "这个应用"}”保存的数据吗？`)) return;
+  await deleteRuntimeState(id); toast("应用数据已清空"); closeSheets();
+}
+
+async function openVersions(id) {
+  const app = await getFullApp(id); state.dataTargetId = id;
+  const versions = app.versions || [];
+  $("#versionsList").innerHTML = versions.length ? versions.map((version, index) => `<article class="version-item"><div><strong>${escapeHTML(version.title)}</strong><small>${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(version.savedAt))}</small></div><button type="button" data-version-index="${index}">恢复</button></article>`).join("") : '<div class="trash-empty">还没有旧版本。</div>';
+  showSheet($("#versionsSheet"));
+}
+
+async function restoreVersion(index) {
+  const id = state.dataTargetId; const app = await getFullApp(id);
+  const target = app.versions?.[Number(index)]; if (!target) return;
+  if (!confirm(`恢复到 ${formatDate(target.savedAt)} 的 HTML 吗？当前版本也会被保留。`)) return;
+  const versions = [{ id: crypto.randomUUID(), savedAt: new Date().toISOString(), title: app.title, html: app.html }, ...app.versions.filter((_, i) => i !== Number(index))].slice(0, 5);
+  await updateApp(id, { html: target.html, versions });
+  state.activeApp = null; closeSheets(); toast("旧版本已恢复");
+}
+
+function openReorder() {
+  state.reorderDraft = [...state.apps]; renderReorder(); showSheet($("#reorderSheet"));
+}
+
+function renderReorder() {
+  $("#reorderList").innerHTML = state.reorderDraft.map((app, index) => {
+    const [bg] = paletteFor(app);
+    return `<article class="reorder-item" draggable="true" data-order-id="${escapeHTML(app.id)}"><span class="drag-grip">⋮⋮</span><span class="mini-icon" style="--icon-bg:${bg}">${iconHTML(app)}</span><strong>${escapeHTML(app.title)}</strong><span class="reorder-buttons"><button type="button" data-move="up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-move="down" ${index === state.reorderDraft.length - 1 ? "disabled" : ""}>↓</button></span></article>`;
+  }).join("");
+}
+
+function moveReorderItem(id, direction) {
+  const from = state.reorderDraft.findIndex((app) => app.id === id);
+  const to = direction === "up" ? from - 1 : from + 1;
+  if (from < 0 || to < 0 || to >= state.reorderDraft.length) return;
+  const [item] = state.reorderDraft.splice(from, 1); state.reorderDraft.splice(to, 0, item); renderReorder();
+}
+
+async function saveReorder() {
+  for (let index = 0; index < state.reorderDraft.length; index += 1) await updateApp(state.reorderDraft[index].id, { order: index, _touchOnly: true });
+  closeSheets(); renderApps(); toast("应用顺序已保存");
 }
 
 async function moveToTrash(ids) {
@@ -961,12 +1119,15 @@ async function moveToTrash(ids) {
 async function handleAction(action) {
   const app = state.activeApp; if (!app) return; closeSheets();
   if (action === "open") return openViewer(app.id);
+  if (action === "duplicate") return duplicateApp(app.id);
+  if (action === "data") return openDataManager(app.id);
+  if (action === "versions") return openVersions(app.id);
   if (action === "favorite") {
     try { await updateApp(app.id, { favorite: !app.favorite }); renderApps(); toast(app.favorite ? "已取消收藏" : "已收藏置顶"); }
     catch (error) { toast(friendlyError(error)); } return;
   }
   if (action === "clear-data") {
-    if (!confirm(`清除“${app.title}”在页匣里自动保存的填写内容和页面数据吗？HTML 本身不会删除。`)) return;
+    if (!confirm(`清除“${app.title}”在里间里自动保存的填写内容和页面数据吗？HTML 本身不会删除。`)) return;
     try { await deleteRuntimeState(app.id); toast("应用数据已清除"); }
     catch { toast("刚才没有清除成功"); }
     return;
@@ -996,7 +1157,7 @@ function toast(message) {
 }
 
 function friendlyError(error) {
-  const map = { unauthorized: "页匣已经锁上，请重新进入。", wrong_password: "密码不对。", empty_password: "先写一个密码。", not_found: "这份应用已经不存在了。" };
+  const map = { unauthorized: "里间已经锁上，请重新进入。", wrong_password: "密码不对。", empty_password: "先写一个密码。", not_found: "这份应用已经不存在了。" };
   return map[error.message] || "刚才没有保存成功，再试一次。";
 }
 
@@ -1009,7 +1170,7 @@ function applyTheme(theme) {
 }
 
 function showLogin(configured, error = "") {
-  $("#loginTitle").textContent = configured ? "打开页匣" : "设置页匣密码";
+  $("#loginTitle").textContent = configured ? "打开里间" : "设置里间密码";
   $("#loginDescription").textContent = configured ? "输入只属于你的访问密码。" : "首次打开，设置一个保存在这台设备上的密码。";
   $("#loginSubmit").textContent = configured ? "进入" : "设置并进入";
   $("#passwordInput").autocomplete = configured ? "current-password" : "new-password";
@@ -1056,8 +1217,17 @@ async function exportBackup() {
   try {
     const records = state.demo ? demoApps : (await withStore("readonly", (store) => store.getAll())).map(normalizeRecord);
     const appStates = state.demo ? [] : await withStore("readonly", (store) => store.getAll(), APP_STATE_STORE_NAME);
-    const backup = { format: "page-vault-backup", version: 4, exportedAt: new Date().toISOString(), apps: records, appStates, viewerPreferences: state.viewerPreferences };
-    downloadBlob(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" }), `page-vault-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    const themes = state.demo ? [] : await withStore("readonly", (store) => store.getAll(), THEME_STORE_NAME);
+    const settings = {
+      appearance: localStorage.getItem(THEME_KEY) || "system",
+      activeTheme: localStorage.getItem(ACTIVE_THEME_KEY) || "",
+      previousTheme: localStorage.getItem(PREVIOUS_THEME_KEY) || "",
+      lockTimeout: localStorage.getItem(LOCK_TIMEOUT_KEY) || "0",
+      gridDensity: localStorage.getItem(GRID_DENSITY_KEY) || "3",
+      lastApp: localStorage.getItem(LAST_APP_KEY) || ""
+    };
+    const backup = { format: "lijian-backup", legacyFormat: "page-vault-backup", version: 5, exportedAt: new Date().toISOString(), apps: records, appStates, themes, viewerPreferences: state.viewerPreferences, settings };
+    downloadBlob(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json;charset=utf-8" }), `里间备份_${new Date().toISOString().slice(0, 10)}.lijian`);
     closeSheets(); toast(`已备份 ${records.length} 个项目和应用数据`);
   } catch { toast("备份生成失败"); }
 }
@@ -1066,31 +1236,40 @@ async function restoreBackup(file) {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    if (data?.format !== "page-vault-backup" || !Array.isArray(data.apps)) throw new Error("invalid_backup");
+    if (!["page-vault-backup", "lijian-backup"].includes(data?.format) || !Array.isArray(data.apps)) throw new Error("invalid_backup");
     if (!confirm(`备份中有 ${data.apps.length} 个项目。相同项目会更新，继续恢复吗？`)) return;
     await putMany(data.apps);
     if (Array.isArray(data.appStates)) await putRuntimeStates(data.appStates);
+    if (Array.isArray(data.themes)) {
+      for (const theme of data.themes) await withStore("readwrite", (store) => store.put(normalizeTheme(theme, theme.name)), THEME_STORE_NAME);
+    }
     if (data.viewerPreferences && typeof data.viewerPreferences === "object") {
       state.viewerPreferences = { ...state.viewerPreferences, ...data.viewerPreferences };
       localStorage.setItem(VIEWER_PREFS_KEY, JSON.stringify(state.viewerPreferences));
     }
+    if (data.settings && typeof data.settings === "object") {
+      const mappings = [[THEME_KEY, data.settings.appearance], [ACTIVE_THEME_KEY, data.settings.activeTheme], [PREVIOUS_THEME_KEY, data.settings.previousTheme], [LOCK_TIMEOUT_KEY, data.settings.lockTimeout], [GRID_DENSITY_KEY, data.settings.gridDensity], [LAST_APP_KEY, data.settings.lastApp]];
+      mappings.forEach(([key, value]) => value === undefined || value === null || value === "" ? localStorage.removeItem(key) : localStorage.setItem(key, String(value)));
+      applyGridDensity(); applyTheme(localStorage.getItem(THEME_KEY) || "system");
+    }
+    await loadThemes();
     await loadApps(); closeSheets(); toast("备份和应用数据已经恢复");
-  } catch { toast("这不是有效的页匣备份"); }
+  } catch { toast("这不是有效的里间备份"); }
   finally { $("#restoreInput").value = ""; }
 }
 
 function renderThemes() {
   $("#themeCount").textContent = `${state.themes.length} 个`;
   const defaultActive = !state.activeTheme;
-  const cards = [{ id: "", name: "页匣默认", author: "内置", description: "恢复页匣原本的纸张与墨色。", builtin: true }, ...state.themes];
+  const cards = [{ id: "", name: "里间默认", author: "内置", description: "恢复里间原本的纸张与墨色。", builtin: true }, ...state.themes];
   $("#themeList").innerHTML = cards.map((theme) => {
     const active = theme.builtin ? defaultActive : state.activeTheme?.id === theme.id;
     const initials = glyphFor(theme.name);
     return `<article class="theme-card${active ? " active" : ""}" data-theme-id="${escapeHTML(theme.id)}">
       <div class="theme-swatch"><span>${escapeHTML(initials)}</span><i></i><b></b></div>
-      <div class="theme-meta"><strong>${escapeHTML(theme.name)}</strong><small>${escapeHTML(theme.author || "未署名")}${active ? " · 使用中" : ""}</small><p>${escapeHTML(theme.description || "自定义页匣外观")}</p></div>
+      <div class="theme-meta"><strong>${escapeHTML(theme.name)}</strong><small>${escapeHTML(theme.author || "未署名")}${active ? " · 使用中" : ""}</small><p>${escapeHTML(theme.description || "自定义里间外观")}</p></div>
       <div class="theme-actions">
-        <button type="button" data-theme-action="apply">${active ? "已应用" : "应用"}</button>
+        <button type="button" data-theme-action="preview">预览</button><button type="button" data-theme-action="apply">${active ? "已应用" : "应用"}</button>
         ${theme.builtin ? "" : '<button type="button" data-theme-action="export">导出</button><button class="danger-text" type="button" data-theme-action="delete">删除</button>'}
       </div>
     </article>`;
@@ -1124,7 +1303,7 @@ async function importThemeFile(file) {
       theme_css_too_large: "主题里的 CSS 太大了。",
       theme_assets_too_large: "主题资源超过 4 MB。",
       theme_external_resource: "主题含有外部链接或不安全代码。",
-      invalid_theme: "这不是有效的页匣主题文件。"
+      invalid_theme: "这不是有效的里间主题文件。"
     };
     toast(messages[error.message] || "主题文件无法读取");
   } finally {
@@ -1154,7 +1333,21 @@ function downloadThemeTemplate() {
 
 async function handleThemeAction(id, action) {
   const theme = state.themes.find((item) => item.id === id) || null;
+  if (action === "preview") {
+    const currentId = state.activeTheme?.id || "";
+    applyCustomTheme(theme, false);
+    const keep = confirm(theme ? `正在预览“${theme.name}”。保留这套主题吗？` : "正在预览里间默认主题。保留吗？");
+    if (keep) {
+      localStorage.setItem(PREVIOUS_THEME_KEY, currentId);
+      applyCustomTheme(theme, true); toast("主题已保留");
+    } else {
+      const previous = state.themes.find((item) => item.id === currentId) || null;
+      applyCustomTheme(previous, false); toast("已退出预览");
+    }
+    renderThemes(); return;
+  }
   if (action === "apply") {
+    localStorage.setItem(PREVIOUS_THEME_KEY, state.activeTheme?.id || "");
     applyCustomTheme(theme);
     renderThemes();
     toast(theme ? `已应用“${theme.name}”` : "已恢复默认外观");
@@ -1170,6 +1363,15 @@ async function handleThemeAction(id, action) {
     renderThemes();
     toast("主题已删除");
   }
+}
+
+function rollbackTheme() {
+  const previousId = localStorage.getItem(PREVIOUS_THEME_KEY) || "";
+  const currentId = state.activeTheme?.id || "";
+  const previous = state.themes.find((theme) => theme.id === previousId) || null;
+  localStorage.setItem(PREVIOUS_THEME_KEY, currentId);
+  applyCustomTheme(previous, true); renderThemes();
+  toast(previous ? `已恢复“${previous.name}”` : "已恢复里间默认主题");
 }
 
 function renderTrash() {
@@ -1215,7 +1417,7 @@ function installPwaRescueGesture() {
     event.preventDefault();
     localStorage.removeItem(ACTIVE_THEME_KEY);
     try { clearAppliedTheme(); } catch { /* the reload below is the final reset */ }
-    alert("页匣已关闭自定义主题，即将恢复默认外观。");
+    alert("里间已关闭自定义主题，即将恢复默认外观。");
     location.reload();
   }, { capture: true, passive: false });
 }
@@ -1223,6 +1425,7 @@ function installPwaRescueGesture() {
 async function init() {
   $("#dateLabel").textContent = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "long" }).format(new Date());
   loadViewerPreferences();
+  applyGridDensity();
   applyTheme(localStorage.getItem(THEME_KEY) || "system"); $("#lockTimeout").value = String(lockMinutes());
   if (hasLockExpired()) { sessionStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(LAST_ACTIVITY_KEY); }
   try {
@@ -1242,6 +1445,7 @@ $("#loginForm").addEventListener("submit", async (event) => {
 });
 $("#showPassword").addEventListener("click", () => { const input = $("#passwordInput"); input.type = input.type === "password" ? "text" : "password"; });
 [$("#addHeroButton"), $("#floatingAdd"), $("#emptyState")].forEach((button) => button.addEventListener("click", () => openEditor()));
+$("#continueButton").addEventListener("click", () => { const id = localStorage.getItem(LAST_APP_KEY); if (id) openViewer(id); });
 $("#settingsButton").addEventListener("click", () => showSheet($("#settingsSheet")));
 $("#scrim").addEventListener("click", closeSheets); $$("[data-close-sheet]").forEach((button) => button.addEventListener("click", closeSheets));
 $("#uploadZone").addEventListener("click", () => $("#fileInput").click()); $("#fileInput").addEventListener("change", (event) => readFile(event.target.files[0]));
@@ -1251,7 +1455,18 @@ $("#titleInput").addEventListener("input", updateIconPreview); $("#htmlInput").a
 $("#searchInput").addEventListener("input", renderApps);
 $("#filterBar").addEventListener("click", (event) => { const button = event.target.closest("[data-filter-type]"); if (!button) return; state.filter = { type: button.dataset.filterType, value: button.dataset.filterValue }; renderApps(); });
 $$("[data-action]").forEach((button) => button.addEventListener("click", () => handleAction(button.dataset.action)));
-$("#closeViewer").addEventListener("click", closeViewer); $("#viewerMore").addEventListener("click", async () => { await closeViewer(); openActions(state.activeApp?.id); });
+$("#closeViewer").addEventListener("click", closeViewer); $("#viewerMore").addEventListener("click", openViewerMenu);
+$("#viewerMenuScrim").addEventListener("click", closeViewerMenu);
+$$('[data-viewer-action]').forEach((button) => button.addEventListener("click", async () => {
+  const action = button.dataset.viewerAction; const id = state.activeApp?.id; closeViewerMenu(); if (!id) return;
+  if (action === "switch") return openSwitcher();
+  if (action === "edit") return openEditor(await getFullApp(id));
+  if (action === "data") return openDataManager(id);
+  if (action === "versions") return openVersions(id);
+  if (action === "duplicate") return duplicateApp(id);
+}));
+[$("#switcherScrim"), $("#closeSwitcher")].forEach((button) => button.addEventListener("click", closeSwitcher));
+$("#switcherList").addEventListener("click", (event) => { const button = event.target.closest("[data-switch-id]"); if (button) switchViewerApp(button.dataset.switchId); });
 $("#viewerDisplayButton").addEventListener("click", openViewerControls);
 [$("#viewerControlsScrim"), $("#closeViewerControls")].forEach((button) => button.addEventListener("click", closeViewerControls));
 $("#zoomOutButton").addEventListener("click", () => setViewerZoom(viewerPreferencesFor().zoom - 10));
@@ -1282,17 +1497,36 @@ $("#logoutButton").addEventListener("click", lockVault);
 $("#lockTimeout").addEventListener("change", (event) => { localStorage.setItem(LOCK_TIMEOUT_KEY, event.target.value); touchActivity(); toast("自动锁定时间已保存"); });
 $("#backupButton").addEventListener("click", exportBackup); $("#restoreButton").addEventListener("click", () => $("#restoreInput").click());
 $("#restoreInput").addEventListener("change", (event) => restoreBackup(event.target.files[0]));
+$("#gridDensity").addEventListener("change", (event) => { applyGridDensity(event.target.value); toast("主页密度已保存"); });
+$("#reorderButton").addEventListener("click", openReorder);
+$("#saveOrderButton").addEventListener("click", saveReorder);
+$("#reorderList").addEventListener("click", (event) => { const button = event.target.closest("[data-move]"); if (button) moveReorderItem(button.closest("[data-order-id]").dataset.orderId, button.dataset.move); });
+let draggedOrderId = null;
+$("#reorderList").addEventListener("dragstart", (event) => { const row = event.target.closest("[data-order-id]"); draggedOrderId = row?.dataset.orderId || null; event.dataTransfer.effectAllowed = "move"; });
+$("#reorderList").addEventListener("dragover", (event) => event.preventDefault());
+$("#reorderList").addEventListener("drop", (event) => {
+  event.preventDefault(); const targetId = event.target.closest("[data-order-id]")?.dataset.orderId;
+  if (!draggedOrderId || !targetId || draggedOrderId === targetId) return;
+  const from = state.reorderDraft.findIndex((app) => app.id === draggedOrderId); const to = state.reorderDraft.findIndex((app) => app.id === targetId);
+  const [item] = state.reorderDraft.splice(from, 1); state.reorderDraft.splice(to, 0, item); draggedOrderId = null; renderReorder();
+});
 $("#trashButton").addEventListener("click", () => { renderTrash(); showSheet($("#trashSheet")); });
 $("#themeWorkshopButton").addEventListener("click", openThemeWorkshop);
 $("#importThemeButton").addEventListener("click", () => $("#themeFileInput").click());
 $("#themeFileInput").addEventListener("change", (event) => importThemeFile(event.target.files[0]));
 $("#themeHelpButton").addEventListener("click", downloadThemeTemplate);
+$("#themeRollbackButton").addEventListener("click", rollbackTheme);
 $("#themeList").addEventListener("click", (event) => {
   const button = event.target.closest("[data-theme-action]"); if (!button) return;
   handleThemeAction(button.closest(".theme-card").dataset.themeId, button.dataset.themeAction);
 });
 $("#trashList").addEventListener("click", (event) => { const button = event.target.closest("[data-trash-action]"); if (!button) return; handleTrashAction(button.closest(".trash-item").dataset.id, button.dataset.trashAction); });
 $("#emptyTrashButton").addEventListener("click", emptyTrash);
+$("#exportAppDataButton").addEventListener("click", exportAppData);
+$("#importAppDataButton").addEventListener("click", () => $("#dataImportInput").click());
+$("#dataImportInput").addEventListener("change", (event) => importAppData(event.target.files[0]));
+$("#clearAppDataButton").addEventListener("click", clearManagedAppData);
+$("#versionsList").addEventListener("click", (event) => { const button = event.target.closest("[data-version-index]"); if (button) restoreVersion(button.dataset.versionIndex); });
 $("#manageButton").addEventListener("click", () => state.multiSelect ? exitMultiSelect() : enterMultiSelect()); $("#cancelBatch").addEventListener("click", exitMultiSelect);
 $("#selectAllButton").addEventListener("click", () => { filteredApps().forEach((app) => state.selected.add(app.id)); renderApps(); });
 $("#addTagsButton").addEventListener("click", () => batchTags("add")); $("#removeTagsButton").addEventListener("click", () => batchTags("remove"));
