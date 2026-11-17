@@ -11,7 +11,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=7.0.2">
+  <link rel="stylesheet" href="./styles.css?v=7.0.3">
   <style id="customThemeStyle"></style>
   <title>里间</title>
 </head>
@@ -208,7 +208,10 @@
     <header class="sheet-head">
       <button class="text-button" data-close-sheet type="button">关闭</button>
       <h2 id="themeTitle">主题工坊</h2>
-      <button id="themeRollbackButton" class="text-button strong" type="button">撤回</button>
+      <div class="sheet-head-actions">
+        <button id="themeTutorialButton" class="text-button" type="button">美化教程</button>
+        <button id="themeRollbackButton" class="text-button strong" type="button">撤回</button>
+      </div>
     </header>
     <div class="sheet-body theme-workshop">
       <input id="themeFileInput" type="file" accept=".pvtheme,.json,.css,application/json,text/css" hidden>
@@ -223,6 +226,59 @@
       <div class="theme-section-head"><strong>我的主题</strong><small id="themeCount">0 个</small></div>
       <div id="themeList" class="theme-list"></div>
       <button id="themeHelpButton" class="secondary-button full-button" type="button">下载主题模板</button>
+    </div>
+  </section>
+
+  <section id="themeTutorialSheet" class="sheet" aria-modal="true" role="dialog" aria-labelledby="themeTutorialTitle" hidden>
+    <div class="sheet-handle"></div>
+    <header class="sheet-head">
+      <button id="themeTutorialBack" class="text-button" type="button">返回</button>
+      <h2 id="themeTutorialTitle">美化教程</h2>
+      <span></span>
+    </header>
+    <div class="sheet-body theme-tutorial">
+      <div class="tutorial-intro">
+        <span>OPEN THEME SYSTEM</span>
+        <h3>把里间改成你的样子</h3>
+        <p>主题由一份 JSON 和其中的 CSS 组成。推荐下载模板后修改，再以 <code>.json</code> 文件导入。</p>
+      </div>
+
+      <article class="tutorial-block">
+        <b>01</b><div><h4>最短制作流程</h4><ol><li>下载主题模板。</li><li>修改名称、作者、颜色变量与 CSS。</li><li>保存为 UTF-8 编码的 <code>.json</code> 文件。</li><li>回到主题工坊导入并预览。</li></ol></div>
+      </article>
+
+      <article class="tutorial-block">
+        <b>02</b><div><h4>文件骨架</h4><pre>{
+  "format": "page-vault-theme",
+  "schemaVersion": 2,
+  "id": "my-theme",
+  "name": "我的主题",
+  "author": "你的名字",
+  "description": "主题简介",
+  "variables": {},
+  "cards": {
+    "colorMode": "cycle",
+    "palette": [["#ffffff", "#222222"]],
+    "variants": []
+  },
+  "assets": {},
+  "css": ""
+}</pre></div>
+      </article>
+
+      <article class="tutorial-block">
+        <b>03</b><div><h4>卡片与图标</h4><p><code>colorMode</code> 可使用 <code>original</code>、<code>uniform</code> 或 <code>cycle</code>。<code>palette</code> 中每组颜色依次为背景色与文字色；<code>variants</code> 可让不同卡片产生规律错落。</p><p>常用变量包括 <code>--card-width</code>、<code>--card-aspect-ratio</code>、<code>--card-radius</code>、<code>--card-shadow</code>、<code>--card-title-size</code>。上传图片可通过 <code>[data-has-icon="true"]</code> 单独处理。</p></div>
+      </article>
+
+      <article class="tutorial-block">
+        <b>04</b><div><h4>常用 CSS 入口</h4><div class="selector-list"><code>body</code><span>整页背景</span><code>.topbar</code><span>顶部栏</span><code>.hero</code><span>首页题头</span><code>.library</code><span>应用区域</span><code>.app-card</code><span>应用卡片</span><code>.app-icon</code><span>图标容器</span><code>.sheet</code><span>底部弹层</span><code>.viewer-bar</code><span>应用查看器</span></div></div>
+      </article>
+
+      <article class="tutorial-block">
+        <b>05</b><div><h4>安全与发布</h4><p>主题会拒绝外部网址、<code>@import</code>、脚本协议和危险 CSS。图片或字体请写进 <code>assets</code>，再使用 <code>asset://资源名</code>。发布前请检查主页、编辑弹层、深浅色文字和上传图标。</p><p>如果主题遮住页面，重新打开后连续点击左上角 7 次，或在地址后添加 <code>?safe=1</code>。</p></div>
+      </article>
+
+      <button id="themeTutorialTemplateButton" class="primary-button tutorial-download" type="button">下载可修改的主题模板</button>
     </div>
   </section>
 
@@ -399,7 +455,7 @@
     </div>
   </div>
 
-  <script src="./app.js?v=7.0.2" type="module"></script>
+  <script src="./app.js?v=7.0.3" type="module"></script>
 </body>
 </html>
 

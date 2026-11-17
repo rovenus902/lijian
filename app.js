@@ -1110,9 +1110,34 @@ async function saveEditor() {
   try {
     const path = state.editingId ? `./api/apps?id=${encodeURIComponent(state.editingId)}` : "./api/apps";
     const saved = await api(path, { method: state.editingId ? "PUT" : "POST", body: JSON.stringify(payload) });
-    upsertMeta(saved); closeSheets(); renderApps(); toast(state.editingId ? "修改已保存" : "已经放进里间");
+    upsertMeta(saved);
+    await syncSavedAppWithViewer(saved);
+    closeSheets(); renderApps(); toast(state.editingId ? "修改已保存" : "已经放进里间");
   } catch (error) { $("#editorError").textContent = friendlyError(error); }
   finally { $("#saveButton").disabled = false; }
+}
+
+async function syncSavedAppWithViewer(saved) {
+  if (state.activeApp?.id !== saved.id) return;
+  const record = normalizeRecord(saved);
+  const viewerOpen = !$("#viewer").hidden;
+  const frame = $("#appFrame");
+  if (viewerOpen && frame.contentWindow) {
+    frame.contentWindow.postMessage({ channel: "page-vault-runtime-v1", type: "flush" }, "*");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await state.runtimeSaveChain.catch(() => {});
+  }
+  state.activeApp = record;
+  if (!viewerOpen) return;
+  const runtimeState = await getRuntimeState(record.id);
+  const runtimeSession = crypto.randomUUID();
+  state.activeRuntimeSession = runtimeSession;
+  $("#viewerTitle").textContent = record.title;
+  frame.srcdoc = "";
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  frame.srcdoc = buildRuntimeDocument(record.html, record.id, runtimeState, runtimeSession);
+  applyViewerPreferences();
+  requestAnimationFrame(updateLandscapePreview);
 }
 
 function upsertMeta(record) {
@@ -1884,6 +1909,9 @@ $("#themeWorkshopButton").addEventListener("click", openThemeWorkshop);
 $("#importThemeButton").addEventListener("click", () => $("#themeFileInput").click());
 $("#themeFileInput").addEventListener("change", (event) => importThemeFile(event.target.files[0]));
 $("#themeHelpButton").addEventListener("click", downloadThemeTemplate);
+$("#themeTutorialButton").addEventListener("click", () => showSheet($("#themeTutorialSheet")));
+$("#themeTutorialBack").addEventListener("click", openThemeWorkshop);
+$("#themeTutorialTemplateButton").addEventListener("click", downloadThemeTemplate);
 $("#themeRollbackButton").addEventListener("click", rollbackTheme);
 $("#themeList").addEventListener("click", (event) => {
   const button = event.target.closest("[data-theme-action]"); if (!button) return;
