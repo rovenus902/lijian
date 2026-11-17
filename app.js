@@ -676,11 +676,34 @@ function postViewerDisplay() {
     channel: "page-vault-runtime-v1",
     type: "display",
     payload: {
-      zoom: preferences.zoom / 100,
+      // 普通缩放由外层 iframe 承担，避免缩小后在右侧留下空白。
+      // 横屏与自动适宽仍交给 iframe 内的运行时处理。
+      zoom: preferences.landscape || preferences.fitWidth ? preferences.zoom / 100 : 1,
       fitWidth: preferences.fitWidth,
       scrollLocked: preferences.scrollLocked
     }
   }, "*");
+}
+
+function updateViewerFrameScale() {
+  const frame = $("#appFrame");
+  const preferences = viewerPreferencesFor();
+  const clearScale = () => {
+    frame.style.removeProperty("width");
+    frame.style.removeProperty("height");
+    frame.style.removeProperty("transform");
+    frame.style.removeProperty("transform-origin");
+  };
+  if (preferences.landscape || preferences.fitWidth || preferences.zoom === 100) {
+    clearScale();
+    return;
+  }
+  const scale = preferences.zoom / 100;
+  const inverse = 100 / scale;
+  frame.style.width = `${inverse}%`;
+  frame.style.height = `${inverse}%`;
+  frame.style.transform = `scale(${scale})`;
+  frame.style.transformOrigin = "0 0";
 }
 
 function updateLandscapePreview() {
@@ -726,6 +749,7 @@ function applyViewerPreferences({ persist = false } = {}) {
   if (persist) saveViewerPreferences(id, preferences);
   renderViewerControls();
   updateLandscapePreview();
+  updateViewerFrameScale();
   postViewerDisplay();
 }
 
