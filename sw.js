@@ -1,5 +1,5 @@
-const CACHE = "lijian-shell-v12";
-const SHELL = ["./", "./index.html", "./styles.css?v=6", "./app.js?v=6", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
+const CACHE = "lijian-shell-v15";
+const SHELL = ["./", "./index.html", "./styles.css?v=7.0.2", "./app.js?v=7.0.2", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
