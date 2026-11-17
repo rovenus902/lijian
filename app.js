@@ -23,6 +23,7 @@ const state = {
   multiSelect: false, selected: new Set(), lockTimer: null,
   themes: [], activeTheme: null, appliedThemeVariables: [],
   runtimeSaveChain: Promise.resolve(), activeRuntimeSession: null,
+  runtimeFlushWaiter: null,
   viewerPreferences: {}, effectiveViewerZoom: 1,
   editingOriginal: null, dataTargetId: null, reorderDraft: [], previewThemeId: null,
   compatibilityDraft: null,
@@ -92,6 +93,12 @@ function normalizeTags(value) {
   return [...new Set(input.map((tag) => String(tag).trim()).filter(Boolean))].slice(0, 20);
 }
 
+function normalizeISODate(value, fallback = null) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : fallback;
+}
+
 function normalizeRecord(record) {
   const now = new Date().toISOString();
   return {
@@ -106,12 +113,12 @@ function normalizeRecord(record) {
     order: Number.isFinite(Number(record.order)) ? Number(record.order) : Number.MAX_SAFE_INTEGER,
     versions: Array.isArray(record.versions) ? record.versions.slice(0, 5).map((item) => ({
       id: String(item.id || crypto.randomUUID()),
-      savedAt: item.savedAt || now,
+      savedAt: normalizeISODate(item.savedAt, now),
       title: String(item.title || record.title || "未命名应用").slice(0, 80),
       html: String(item.html || "")
     })).filter((item) => item.html) : [],
-    lastOpenedAt: record.lastOpenedAt || null, deletedAt: record.deletedAt || null,
-    createdAt: record.createdAt || now, updatedAt: record.updatedAt || now
+    lastOpenedAt: normalizeISODate(record.lastOpenedAt, null), deletedAt: normalizeISODate(record.deletedAt, null),
+    createdAt: normalizeISODate(record.createdAt, now), updatedAt: normalizeISODate(record.updatedAt, now)
   };
 }
 
@@ -196,7 +203,7 @@ function normalizeTheme(raw, fallbackName = "自定义主题") {
     name, author: String(input.author || "").slice(0, 60),
     description: String(input.description || "").slice(0, 180),
     variables, assets, css, cards: normalizeThemeCards(input.cards),
-    createdAt: input.createdAt || new Date().toISOString(),
+    createdAt: normalizeISODate(input.createdAt, new Date().toISOString()),
     updatedAt: new Date().toISOString()
   };
 }
@@ -281,15 +288,15 @@ async function saveTheme(theme) {
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 4);
+    const request = indexedDB.open(DB_NAME, 5);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME, { keyPath: "id" });
       if (!request.result.objectStoreNames.contains(THEME_STORE_NAME)) request.result.createObjectStore(THEME_STORE_NAME, { keyPath: "id" });
       if (!request.result.objectStoreNames.contains(APP_STATE_STORE_NAME)) request.result.createObjectStore(APP_STATE_STORE_NAME, { keyPath: "id" });
-      if (!request.result.objectStoreNames.contains(SNAPSHOT_STORE_NAME)) {
-        const snapshots = request.result.createObjectStore(SNAPSHOT_STORE_NAME, { keyPath: "id" });
-        snapshots.createIndex("appId", "appId", { unique: false });
-      }
+      const snapshots = request.result.objectStoreNames.contains(SNAPSHOT_STORE_NAME)
+        ? request.transaction.objectStore(SNAPSHOT_STORE_NAME)
+        : request.result.createObjectStore(SNAPSHOT_STORE_NAME, { keyPath: "id" });
+      if (!snapshots.indexNames.contains("appId")) snapshots.createIndex("appId", "appId", { unique: false });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -388,7 +395,7 @@ async function putRuntimeSnapshots(records) {
     const store = transaction.objectStore(SNAPSHOT_STORE_NAME);
     records.forEach((record) => {
       if (!record?.appId || !record?.runtime) return;
-      store.put({ id: String(record.id || crypto.randomUUID()), appId: String(record.appId), createdAt: record.createdAt || new Date().toISOString(), reason: String(record.reason || "备份"), runtime: normalizeRuntimeState(String(record.appId), record.runtime) });
+      store.put({ id: String(record.id || crypto.randomUUID()), appId: String(record.appId), createdAt: normalizeISODate(record.createdAt, new Date().toISOString()), reason: String(record.reason || "备份"), runtime: normalizeRuntimeState(String(record.appId), record.runtime) });
     });
     transaction.oncomplete = () => { database.close(); resolve(); };
     transaction.onerror = () => { database.close(); reject(transaction.error); };
@@ -413,12 +420,36 @@ async function deleteRuntimeSnapshots(appId) {
 }
 
 function queueRuntimeStateSave(id, payload) {
-  if (state.demo || !id) return;
+  if (state.demo || !id) return Promise.resolve();
   const snapshot = normalizeRuntimeState(id, payload);
   state.runtimeSaveChain = state.runtimeSaveChain
     .catch(() => {})
     .then(() => withStore("readwrite", (store) => store.put(snapshot), APP_STATE_STORE_NAME))
     .catch((error) => console.warn("Page Vault state save failed", error));
+  return state.runtimeSaveChain;
+}
+
+async function flushViewerRuntime(timeout = 650) {
+  const frame = $("#appFrame");
+  const session = state.activeRuntimeSession;
+  if ($("#viewer").hidden || !frame?.contentWindow || !session) {
+    await state.runtimeSaveChain.catch(() => {});
+    return;
+  }
+  state.runtimeFlushWaiter?.finish();
+  await new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (state.runtimeFlushWaiter?.session === session) state.runtimeFlushWaiter = null;
+      Promise.resolve(state.runtimeSaveChain).catch(() => {}).finally(resolve);
+    };
+    const timer = setTimeout(finish, timeout);
+    state.runtimeFlushWaiter = { session, finish };
+    frame.contentWindow.postMessage({ channel: "page-vault-runtime-v1", type: "flush" }, "*");
+  });
 }
 
 function pageVaultRuntimeBridge(initialState, appId, runtimeSession) {
@@ -503,14 +534,40 @@ function pageVaultRuntimeBridge(initialState, appId, runtimeSession) {
   document.addEventListener("wheel", blockLockedScroll, { passive: false, capture: true });
   document.addEventListener("keydown", blockLockedScroll, { capture: true });
 
-  const storage = {
-    key(index) { return Object.keys(storageData)[Number(index)] ?? null; },
-    getItem(key) { key = String(key); return Object.prototype.hasOwnProperty.call(storageData, key) ? storageData[key] : null; },
-    setItem(key, value) { storageData[String(key)] = String(value); scheduleSave(); },
-    removeItem(key) { delete storageData[String(key)]; scheduleSave(); },
-    clear() { Object.keys(storageData).forEach((key) => delete storageData[key]); scheduleSave(); }
-  };
-  Object.defineProperty(storage, "length", { enumerable: true, get: () => Object.keys(storageData).length });
+  const storageCore = {};
+  Object.defineProperties(storageCore, {
+    key: { value(index) { return Object.keys(storageData)[Number(index)] ?? null; } },
+    getItem: { value(key) { key = String(key); return Object.prototype.hasOwnProperty.call(storageData, key) ? storageData[key] : null; } },
+    setItem: { value(key, value) { storageData[String(key)] = String(value); scheduleSave(); } },
+    removeItem: { value(key) { delete storageData[String(key)]; scheduleSave(); } },
+    clear: { value() { Object.keys(storageData).forEach((key) => delete storageData[key]); scheduleSave(); } },
+    length: { get() { return Object.keys(storageData).length; } }
+  });
+  const storage = new Proxy(storageCore, {
+    get(target, property, receiver) {
+      if (typeof property === "symbol" || Reflect.has(target, property)) return Reflect.get(target, property, receiver);
+      return target.getItem(property);
+    },
+    set(target, property, value, receiver) {
+      if (typeof property === "symbol" || Reflect.has(target, property)) return Reflect.set(target, property, value, receiver);
+      target.setItem(property, value); return true;
+    },
+    deleteProperty(target, property) {
+      if (typeof property === "symbol" || Reflect.has(target, property)) return false;
+      target.removeItem(property); return true;
+    },
+    ownKeys(target) {
+      return [...Reflect.ownKeys(target), ...Object.keys(storageData).filter((key) => !Reflect.has(target, key))];
+    },
+    getOwnPropertyDescriptor(target, property) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(target, property);
+      if (descriptor) return descriptor;
+      if (typeof property === "string" && Object.prototype.hasOwnProperty.call(storageData, property)) {
+        return { configurable: true, enumerable: true, writable: true, value: storageData[property] };
+      }
+      return undefined;
+    }
+  });
   try { Object.defineProperty(window, "localStorage", { configurable: true, enumerable: true, value: storage }); }
   catch { /* opaque sandbox storage stays unavailable; PageVault.storage still works */ }
 
@@ -573,9 +630,9 @@ function pageVaultRuntimeBridge(initialState, appId, runtimeSession) {
     return { form: formState, storage: { ...storageData }, custom: clone(customState), scroll: scrollState };
   }
 
-  function flush() {
+  function flush(acknowledge = false) {
     clearTimeout(saveTimer);
-    post("save", snapshot());
+    post(acknowledge ? "flush-save" : "save", snapshot());
   }
 
   function scheduleSave(immediate = false) {
@@ -601,7 +658,7 @@ function pageVaultRuntimeBridge(initialState, appId, runtimeSession) {
   window.addEventListener("pagehide", flush);
   window.addEventListener("message", (event) => {
     if (event.data?.channel !== CHANNEL) return;
-    if (event.data.type === "flush") flush();
+    if (event.data.type === "flush") flush(true);
     if (event.data.type === "display") {
       const payload = event.data.payload && typeof event.data.payload === "object" ? event.data.payload : {};
       displaySettings = {
@@ -792,8 +849,12 @@ window.addEventListener("message", (event) => {
   if (message?.channel !== "page-vault-runtime-v1") return;
   if (!state.activeApp?.id || message.appId !== state.activeApp.id) return;
   if (!state.activeRuntimeSession || message.runtimeSession !== state.activeRuntimeSession) return;
-  if (message.type === "save") {
-    try { queueRuntimeStateSave(message.appId, message.payload); }
+  if (message.type === "save" || message.type === "flush-save") {
+    try {
+      const savePromise = queueRuntimeStateSave(message.appId, message.payload);
+      const waiter = state.runtimeFlushWaiter;
+      if (message.type === "flush-save" && waiter?.session === message.runtimeSession) savePromise.finally(waiter.finish);
+    }
     catch (error) { console.warn("Page Vault rejected app state", error); }
   }
   if (message.type === "ready") postViewerDisplay();
@@ -983,7 +1044,15 @@ function renderApps() {
   });
 }
 
-function formatDate(value) { return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(value)); }
+function formatDate(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(date) : "日期未知";
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date) : "日期未知";
+}
 
 async function loadApps() {
   const data = await api("./api/apps");
@@ -1146,11 +1215,7 @@ async function syncSavedAppWithViewer(saved) {
   const record = normalizeRecord(saved);
   const viewerOpen = !$("#viewer").hidden;
   const frame = $("#appFrame");
-  if (viewerOpen && frame.contentWindow) {
-    frame.contentWindow.postMessage({ channel: "page-vault-runtime-v1", type: "flush" }, "*");
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    await state.runtimeSaveChain.catch(() => {});
-  }
+  if (viewerOpen && frame.contentWindow) await flushViewerRuntime();
   state.activeApp = record;
   if (!viewerOpen) return;
   const runtimeState = await getRuntimeState(record.id);
@@ -1203,11 +1268,7 @@ async function openViewer(id) {
 
 async function closeViewer() {
   const frame = $("#appFrame");
-  if (!$("#viewer").hidden && frame.contentWindow) {
-    frame.contentWindow.postMessage({ channel: "page-vault-runtime-v1", type: "flush" }, "*");
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    await state.runtimeSaveChain;
-  }
+  if (!$("#viewer").hidden && frame.contentWindow) await flushViewerRuntime();
   closeViewerControls(); closeViewerMenu(); closeSwitcher(); setImmersive(false);
   state.activeRuntimeSession = null;
   $("#viewer").hidden = true; frame.srcdoc = ""; document.body.style.overflow = "";
@@ -1263,12 +1324,7 @@ function openSwitcher() {
 }
 
 async function flushActiveViewer() {
-  const frame = $("#appFrame");
-  if (!$("#viewer").hidden && frame.contentWindow) {
-    frame.contentWindow.postMessage({ channel: "page-vault-runtime-v1", type: "flush" }, "*");
-    await new Promise((resolve) => setTimeout(resolve, 90));
-    await state.runtimeSaveChain;
-  }
+  await flushViewerRuntime();
 }
 
 async function switchViewerApp(id) {
@@ -1317,7 +1373,7 @@ async function openDataManager(id) {
 }
 
 function renderSnapshotList(snapshots) {
-  $("#snapshotList").innerHTML = snapshots.length ? snapshots.map((snapshot) => `<article class="snapshot-item" data-snapshot-id="${escapeHTML(snapshot.id)}"><div><strong>${escapeHTML(snapshot.reason || "数据快照")}</strong><small>${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.createdAt))} · ${formatBytes(new Blob([JSON.stringify(snapshot.runtime)]).size)}</small></div><span class="snapshot-actions"><button type="button" data-snapshot-action="restore">恢复</button><button type="button" data-snapshot-action="delete">删除</button></span></article>`).join("") : '<div class="trash-empty">还没有数据快照。</div>';
+  $("#snapshotList").innerHTML = snapshots.length ? snapshots.map((snapshot) => `<article class="snapshot-item" data-snapshot-id="${escapeHTML(snapshot.id)}"><div><strong>${escapeHTML(snapshot.reason || "数据快照")}</strong><small>${formatDateTime(snapshot.createdAt)} · ${formatBytes(new Blob([JSON.stringify(snapshot.runtime)]).size)}</small></div><span class="snapshot-actions"><button type="button" data-snapshot-action="restore">恢复</button><button type="button" data-snapshot-action="delete">删除</button></span></article>`).join("") : '<div class="trash-empty">还没有数据快照。</div>';
 }
 
 async function refreshSnapshotList() {
@@ -1379,7 +1435,7 @@ async function clearManagedAppData() {
 async function openVersions(id) {
   const app = await getFullApp(id); state.dataTargetId = id;
   const versions = app.versions || [];
-  $("#versionsList").innerHTML = versions.length ? versions.map((version, index) => `<article class="version-item"><div><strong>${escapeHTML(version.title)}</strong><small>${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(version.savedAt))}</small></div><span class="version-actions"><button type="button" data-version-compare="${index}">对比</button><button type="button" data-version-index="${index}">恢复</button></span></article>`).join("") : '<div class="trash-empty">还没有旧版本。</div>';
+  $("#versionsList").innerHTML = versions.length ? versions.map((version, index) => `<article class="version-item"><div><strong>${escapeHTML(version.title)}</strong><small>${formatDateTime(version.savedAt)}</small></div><span class="version-actions"><button type="button" data-version-compare="${index}">对比</button><button type="button" data-version-index="${index}">恢复</button></span></article>`).join("") : '<div class="trash-empty">还没有旧版本。</div>';
   showSheet($("#versionsSheet"));
 }
 
@@ -1416,8 +1472,10 @@ async function restoreVersion(index) {
   const target = app.versions?.[Number(index)]; if (!target) return;
   if (!confirm(`恢复到 ${formatDate(target.savedAt)} 的 HTML 吗？当前版本也会被保留。`)) return;
   const versions = [{ id: crypto.randomUUID(), savedAt: new Date().toISOString(), title: app.title, html: app.html }, ...app.versions.filter((_, i) => i !== Number(index))].slice(0, 5);
-  await updateApp(id, { html: target.html, versions });
-  state.activeApp = null; closeSheets(); toast("旧版本已恢复");
+  const saved = await updateApp(id, { html: target.html, versions });
+  await syncSavedAppWithViewer(saved);
+  if ($("#viewer").hidden) state.activeApp = null;
+  closeSheets(); toast("旧版本已恢复");
 }
 
 function openReorder() {
@@ -1483,7 +1541,7 @@ async function handleAction(action) {
   }
 }
 
-function safeFileName(value) { return String(value || "app").replace(/[\\/:*?"<>|]/g, "-").slice(0, 80); }
+function safeFileName(value) { return String(value || "app").replace(/[\\/:*?"<>|]/g, "-").slice(0, 80) || "app"; }
 function updateCodeStats() { $("#codeStats").textContent = `${$("#htmlInput").value.length.toLocaleString("zh-CN")} 字符`; }
 function toast(message) {
   const element = $("#toast"); element.textContent = message; element.classList.add("show");
